@@ -1,0 +1,332 @@
+---
+title: "Liver WAT crosstalk analysis snRNA and snMultiomeRNA with ambient RNA removal CellBender"
+author: "Johanne D. Madsen, Aino R. Peltonen"
+date: "`r Sys.Date()`"
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+#| message: false
+library(magrittr)
+library(dplyr)
+library(CRMetrics)
+library(knitr)
+library(sccore)
+library(qs)
+library(scHelper)
+library(parallel)
+library(pagoda2)
+library(conos)
+library(cowplot)
+library(ggplot2)
+library(DESeq2)
+library(tidyr)
+library(DelayedMatrixStats)
+library(Matrix)
+n.cores = 32
+```
+
+# Loading aligned data
+
+The ambient RNA removed object is loaded first and saved under `crm_raw.RData` in the `data-raw` after which the cells are filtered based on genetic demultiplexing results and saved under the `data` folder.
+
+If the saved cms objects already exist, they are loaded to the R environment instead of creating new ones with the scripts.
+
+```{r chunk 1}
+#| message: false
+
+data_list <- list.files(path = c("../data/", "../data-raw/", "../data/doubletremoval/"))
+
+if("crm_environment.RData" %in% data_list){
+    load("../data/crm_environment.RData")
+} else{
+    source("../R/2_Data_load_and_filtering_based_on_demux_snM.R")
+    data_list <- list.files(path = c("../data/", "../data-raw/"))
+}
+```
+
+Checking the number of cells in each of the objects
+```{r chunk 2}
+if("total_cells_before_cleanup.RData" %in% data_list){
+    load("../data/total_cells_before_cleanup.RData")
+} else {
+    length_list<-lapply(crm$cms, function(x) length(colnames(x)))
+    cells_crm <-sum(unlist(length_list))
+    
+    total_cells <- data.frame(cells_ambientremoval, cells_crm)
+    save(total_cells, file = "../data/total_cells_before_cleanup.RData")
+}
+
+total_cells
+```
+
+
+## Preprocessing
+
+Preprocessing was done using seurat after which an embedding is created and this returns a conos object.
+
+From this we can create the initial UMAP.
+```{r chunk 3}
+#| warning: false
+if (is.null(crm$cms.preprocessed)){
+    crm$doPreprocessing()
+    crm$createEmbedding()
+    save(crm, file = "../data/crm_environment.RData")
+}
+
+crm$plotEmbedding(plot.na = F, 
+                  title = "clusters", 
+                  mark.groups = F, 
+                  show.legend = T,
+                  pal = c("#bf0808", "#c24a02", "#ffbf00", "#eded39", "#879c02", "#3f7a02", 
+                          "#32a850", "#048f5b", "#10adad", "#009dff", "#0636c4", "#5842eb", 
+                          "#6d02d6", "#aa02c2", "#910a6f", "#a30d46", "red", "blue", 
+                          "yellow", "white", "black", "gray", "cyan", "purple")) + 
+    guides(colour = guide_legend(override.aes = list(size=5, alpha = 1)))
+```
+
+## Filtering nuclei
+
+Let's try what removing doublets does, although technically there shouldn't be doublets in the dataset as they were mostly detected in the genetic demultiplexing. We are also filtering based on depth and mitochondrial fraction.
+
+> After running `crm$detectDoublets` run the python scrip it creates in terminal!
+> The DOUBLETDETECTION.py is also made in the `data/` folder of the Rproj, but when run it calls on the files in a `data/` folder under the folder it is in, so copy the python script to your main Rproj folder and run it from there with `python3 DOUBLETDETECTION.py`.
+
+1412 possible doublets detected
+
+```{r chunk 4}
+if("DOUBLETDETECTION.py" %in% data_list == FALSE){
+    crm$detectDoublets(method = "doubletdetection", export = TRUE, 
+                       data.path = "/work/with_ambientRNAremoval/data/doubletremoval/")
+} else if(exists("doublets", where = crm)){
+    
+} else if("*.doubletdetection" %in% data_list){
+    crm$addDoublets(method = "doubletdetection", data.path = "../data/doubletremoval/")
+    save(crm, file = "../data/crm_environment.RData")
+} else{
+    cat("There is a problem with doublets.")
+}
+
+
+```
+
+```{r chunk 5}
+crm$plotFilteredCells(type = "embedding", 
+                      depth = TRUE, 
+                      depth.cutoff = 1e3, # Default 1000
+                      mito.frac = TRUE, 
+                      mito.cutoff = 0.02, # Default 0.05
+                      species = "human",
+                      doublet.method = "doubletdetection", # Default NULL
+                      cols = c("gray", "#bf0808", "#ffbf00", "#3f7a02",  
+                               "#009dff", "#0636c4", "#aa02c2", "#910a6f", "#a30d46")) + 
+    guides(colour = guide_legend(override.aes = list(size=5, alpha = 1)))
+```
+## Specific plots
+
+Also filtering the cells at the end
+
+```{r chunk 6}
+crm$plotEmbedding(depth = TRUE, 
+                  depth.cutoff = 1e3,
+                  species = "human")
+
+# crm$plotEmbedding(mito.frac = TRUE,
+#                   mito.cutoff = 0.02, # Default 0.05
+#                   species = "human")
+
+crm$plotEmbedding(mito.frac = TRUE,
+                  mito.cutoff = 0.02, # Default 0.05
+                  species = "human")
+
+crm$plotEmbedding(doublet.method = "doubletdetection",
+                  doublet.scores = FALSE,
+                  species = "human")
+```
+
+## Creating the filtered object
+
+```{r chunk 7}
+if(exists("cms.filtered", where = crm) == FALSE){
+    crm$filterCms(depth.cutoff = 1e3, mito.cutoff = 0.02, 
+                  species = "human", doublets = "doubletdetection")
+    crm$cms.preprocessed <- NULL
+    save(crm, file = "../data/crm_environment_filtered_002.RData")
+}
+
+length_list_crm <- lapply(crm$cms, function(x) length(colnames(x)))
+length_list_crm.filtered <- lapply(crm$cms.filtered, function(x) length(colnames(x)))
+cells_crm <- sum(unlist(length_list_crm))
+cells_crm.filtered005 <-sum(unlist(length_list_crm.filtered))
+cells_removed <- cells_crm - cells_crm.filtered005
+total_cells <- data.frame(total_cells, cells_crm.filtered005, cells_removed)
+total_cells
+```
+
+
+## Replotting the filtered object 
+
+Above a looser cut off for mitochondrial RNA was used, so here the filtered object is clustered again to see, that the mitochondrial DNA left over doesn't drive clustering. 
+
+```{r chunk 8}
+#| message: false
+#| warning: false
+
+if (is.null(crm$cms.preprocessed)){
+    crm$doPreprocessing(cms = crm$cms.filtered)
+    crm$createEmbedding()
+    # crm$cms.filtered <- NULL
+    save(crm, file = "../data/crm_environment_filtered_002.RData")
+    data_list <- list.files(path = c("../data/", "../data-raw/"))
+} else{
+    load("../with_ambientRNAremoval/data/crm_environment_filtered_002.RData")
+}
+```
+
+```{r chunk 9}
+crm$plotEmbedding(plot.na = F, 
+                  title = "clusters", 
+                  mark.groups = F, 
+                  show.legend = T,
+                  pal = #rainbow(23)
+                      c("#bf0808", "#c24a02", "#ffbf00", "#eded39", "#879c02", "#3f7a02", "#32a850", 
+                        "#048f5b", "#10adad", "#009dff", "#0636c4", "#5842eb", "#6d02d6", "#aa02c2", 
+                        "#910a6f", "#a30d46", "pink", "gray")
+                      ) + 
+    guides(colour = guide_legend(override.aes = list(size=5, alpha = 1)))
+
+# crm$plotEmbedding(mito.frac = TRUE,
+#                   mito.cutoff = 0.02, # Default 0.05
+#                   species = "human")
+
+spc <- crm$con$getDatasetPerCell()
+
+crm$plotEmbedding(groups = spc, 
+                  mark.groups = F, 
+                  title = "Donors", 
+                  show.legend = T,
+                  size = 0.5,
+                  pal = rainbow(26)
+                      # c("#bf0819", "#FF0000", "#c24a02", "#FF4000", "#FF8000", "#FFBF00", 
+                      #     "#FFFF00", "#879c02", "#3f7a02", "#32a850", "#00FFBF", "#00FFFF", 
+                      #     "#00BFFF", "#0080FF", "#0040FF", "#0636c4", "#8000FF", "#BF00FF", 
+                      #     "#FF00FF", "#FF00BF", "#FF0080", "#910a6f", "#a30d46", "pink")
+                      ) + 
+    guides(colour = guide_legend(override.aes = list(size=5, alpha = 1)))
+
+summary(spc)
+```
+
+## Conos alignement strength 0.2
+
+To get better clustering, the embedding was done again, this time with 0.2 (default NULL) alignement.strength for Conos.
+
+```{r chunk 10}
+#| message: false
+crm$createEmbedding(arg.buildGraph = list(alignment.strength = 0.2))
+```
+
+```{r chunk 11}
+crm$plotEmbedding(plot.na = F, 
+                  title = "clusters", 
+                  mark.groups = F, 
+                  show.legend = T,
+                  pal = c("#bf0808", "#c24a02", "#ffbf00", "#eded39", "#879c02", "#3f7a02", "#32a850", 
+                          "#10adad", "#009dff", "#0636c4", "#5842eb", "#6d02d6", "#aa02c2", 
+                          "#910a6f", "#a30d46", "pink")) + 
+    guides(colour = guide_legend(override.aes = list(size=5, alpha = 1)))
+
+# crm$plotEmbedding(mito.frac = TRUE,
+#                   mito.cutoff = 0.02, # Default 0.05
+#                   species = "human")
+```
+
+## Filtering with mitochondrial fraction >0.02
+
+```{r chunk 12}
+# if("crm_environment_filtered_002.RData" %in% data_list){
+#     crm$filterCms(depth.cutoff = 1e3, mito.cutoff = 0.02, 
+#                   species = "human", doublets = "doubletdetection")
+#     save(crm, file = "../data/crm_environment_filtered_002.RData")
+# }
+# 
+# length_list_crm <- lapply(crm$cms, function(x) length(colnames(x)))
+# length_list_crm.filtered <- lapply(crm$cms.filtered, function(x) length(colnames(x)))
+# cells_crm <- sum(unlist(length_list_crm))
+# cells_crm.filtered002 <-sum(unlist(length_list_crm.filtered))
+# cells_removed <- cells_crm - cells_crm.filtered002
+# total_cells <- data.frame(total_cells, cells_crm.filtered002, cells_removed)
+# total_cells
+```
+
+```{r chunk 13}
+#| message: false
+#| warning: false
+
+# if("crm_environment_filtered_002.RData" %in% data_list){
+#     load("../data/crm_environment_filtered_002.RData")
+# } else{
+#     crm$doPreprocessing(cms = crm$cms.filtered)
+#     crm$createEmbedding()
+#     crm$cms.filtered <- NULL
+#     save(crm, file = "../data/crm_environment_filtered_002.RData")
+#     data_list <- list.files(path = c("../data/", "../data-raw/"))
+# }
+```
+
+```{r chunk 14}
+# crm$plotEmbedding(plot.na = F, 
+#                   title = "clusters", 
+#                   mark.groups = F, 
+#                   show.legend = T,
+#                   pal = c("#bf0819", "#FF0000", "#c24a02", "#FF4000", "#FF8000", "#FFBF00", 
+#                           "#FFFF00", "#879c02", "#3f7a02", "#32a850", "#00FFBF", "#00FFFF", 
+#                           "#00BFFF", "#0080FF", "#0040FF", "#0636c4", "#8000FF", "#BF00FF", 
+#                           "#FF00FF", "#FF00BF", "#FF0080", "#910a6f", "#a30d46", "pink")) + 
+#     guides(colour = guide_legend(override.aes = list(size=5, alpha = 1)))
+# 
+# spc <- crm$con$getDatasetPerCell()
+# 
+# crm$plotEmbedding(groups = spc, 
+#                   mark.groups = F, 
+#                   title = "Donors", 
+#                   show.legend = T,
+#                   size = 0.5,
+#                   pal = c("#bf0819", "#FF0000", "#c24a02", "#FF4000", "#FF8000", "#FFBF00", 
+#                           "#FFFF00", "#879c02", "#3f7a02", "#32a850", "#00FFBF", "#00FFFF", 
+#                           "#00BFFF", "#0080FF", "#0040FF", "#0636c4", "#8000FF", "#BF00FF", 
+#                           "#FF00FF", "#FF00BF", "#FF0080", "#910a6f", "#a30d46", "pink")) + 
+#     guides(colour = guide_legend(override.aes = list(size=5, alpha = 1)))
+# 
+# summary(spc)
+```
+
+
+### Conos alignemnt strength 0.2
+
+```{r chunk 16}
+#| message: false
+#| warning: false
+# crm$createEmbedding(arg.buildGraph = list(alignment.strength = 0.2))
+```
+
+```{r chunk 17}
+# crm$plotEmbedding(plot.na = F, 
+#                   title = "clusters", 
+#                   mark.groups = F, 
+#                   show.legend = T,
+#                   pal = c("#bf0808", "#c24a02", "#ffbf00", "#eded39", "#879c02", "#3f7a02",
+#                           "#32a850", "#10adad", "#009dff", "#0636c4", "#5842eb", "#6d02d6",
+#                           "#aa02c2", "#910a6f", "#a30d46", "pink")) + 
+#     guides(colour = guide_legend(override.aes = list(size=5, alpha = 1)))
+```
+
+```{r}
+sessionInfo()
+```
+

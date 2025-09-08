@@ -1,0 +1,64 @@
+---
+title: "Keeping the cells that are in the object with ambient RNA removal"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+#| message: false
+library(magrittr)
+library(dplyr)
+library(CRMetrics)
+library(knitr)
+library(sccore)
+library(qs)
+library(scHelper)
+library(parallel)
+library(pagoda2)
+library(conos)
+library(cowplot)
+library(ggplot2)
+library(DESeq2)
+library(tidyr)
+library(DelayedMatrixStats)
+library(Seurat)
+
+#is important for it to work with cacoa later
+options(Seurat.object.assay.version = "v3")
+n.cores = 62
+```
+
+```{r chunk 1}
+seurat_common <- qread("../data/seurat_object.qs")
+```
+
+```{r chunk 1}
+seurat_common_with_ambientremoval <- qread("/work/with_ambientRNAremoval/data/seurat_object_annotated.qs")
+
+ambient_filtered_cells<-colnames(seurat_common_with_ambientremoval)
+
+
+
+extract_last_18 <- function(x) {
+  substring(x, nchar(x) - 17, nchar(x))
+}
+
+# Apply the function to each element in the vector
+last_18_chars_vector <- sapply(ambient_filtered_cells, extract_last_18)
+
+matches <- sapply(last_18_chars_vector, function(pattern) {
+  grepl(pattern, colnames(seurat_common))
+})
+
+matching_colnames <- colnames(seurat_common)[rowSums(matches) > 0]
+
+
+seurat_common_filtered<-subset(seurat_common, cells=matching_colnames)
+qsave(seurat_common_filtered ,"../data/filtered_seurat_object.qs")
+```
