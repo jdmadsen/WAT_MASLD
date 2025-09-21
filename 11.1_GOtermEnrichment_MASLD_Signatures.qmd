@@ -1,0 +1,305 @@
+---
+title: "GO term analysis of MASLD gene signatures from Myeloid cells, ASPCs and Adipocytes"
+author: "Johanne D. Madsen"
+format: html
+editor: visual
+---
+
+```{r}
+require(openxlsx)
+library(clusterProfiler)
+library(readxl)
+library(org.Hs.eg.db)
+library(tidytable)
+library(purrr)
+library(dplyr)
+library(textshape)
+library(pheatmap)
+library(qs)
+
+```
+
+```{r}
+
+file_path <- "/work/without_ambientRNAremoval/data/Kmeans_clusters_seed30_p01_Adipocytes_1v1_chosen.xlsx"
+Adipocytes <- read.xlsx(file_path)
+
+colnames(Adipocytes)<-c("gene","cluster")
+
+Adipocytes_S1=as.vector(Adipocytes$gene[Adipocytes$cluster == 2])
+Adipocytes_S23=as.vector(Adipocytes$gene[Adipocytes$cluster == 1])
+Adipocytes_S3=as.vector(Adipocytes$gene[Adipocytes$cluster == 3])
+
+
+file_path <- "/work/without_ambientRNAremoval/data/Kmeans_clusters_seed30_p01_Myeloid_1v1_chosen.xlsx"
+Myeloid <- read.xlsx(file_path)
+
+colnames(Myeloid)<-c("gene","cluster")
+
+Myeloid_S1=as.vector(Myeloid$gene[Myeloid$cluster == 3])
+Myeloid_S23=as.vector(Myeloid$gene[Myeloid$cluster == 1])
+Myeloid_S3=as.vector(Myeloid$gene[Myeloid$cluster == 2])
+ 
+file_path <- "/work/without_ambientRNAremoval/data/Kmeans_clusters_seed600_p01_ASPCs_2clusters_1v1_chosen.xlsx"
+ASPC <- read.xlsx(file_path)
+
+colnames(ASPC)<-c("gene","cluster")
+
+ASPC_S12=as.vector(ASPC$gene[ASPC$cluster == 2])
+ASPC_S3=as.vector(ASPC$gene[ASPC$cluster == 1])
+
+
+```
+
+```{r, results="hide"}
+   
+ multiplesheets <- function(fname) { 
+    
+   # getting info about all excel sheets 
+   sheets <- readxl::excel_sheets(fname) 
+   tibble <- lapply(sheets, function(x) readxl::read_excel(fname, sheet = x,col_names=T)) 
+   data_frame <- lapply(tibble, as.data.frame) 
+     
+   # assigning names to data frames 
+   names(data_frame) <- sheets 
+     
+   # print data frame 
+   print(data_frame) 
+ } 
+   
+ # specifying the path name 
+List_DE_S1S2<-multiplesheets("/work/without_ambientRNAremoval/data/DElists/List_DE_caoS1S2.xlsx")
+List_DE_S1S3<-multiplesheets("/work/without_ambientRNAremoval/data/DElists/List_DE_caoS1S3.xlsx")
+List_DE_S2S3<-multiplesheets("/work/without_ambientRNAremoval/data/DElists/List_DE_caoS2S3.xlsx")
+ 
+
+ 
+ List_DE_S1S2<-lapply(List_DE_S1S2, function(x){rownames(x)<-x[,1]
+return(x)} )
+ 
+ List_DE_S1S3<-lapply(List_DE_S1S3, function(x){rownames(x)<-x[,1]
+return(x)} )
+ 
+ List_DE_S2S3<-lapply(List_DE_S2S3, function(x){rownames(x)<-x[,1]
+return(x)} )
+```
+
+```{r, results="hide"}
+
+background_list_adipocytes<-unique(c(List_DE_S1S2$Adipocytes$Gene,
+  List_DE_S1S3$Adipocytes$Gene,
+  List_DE_S2S3$Adipocytes$Gene
+  ))
+
+length(background_list_adipocytes)
+
+background_list_Myeloid_cells<-unique(c(List_DE_S1S2$Myeloid_cells$Gene,
+  List_DE_S1S3$Myeloid_cells$Gene,
+  List_DE_S2S3$Myeloid_cells$Gene
+  ))
+length(background_list_Myeloid_cells)
+
+background_list_ASPCs<-unique(c(List_DE_S1S2$ASPCs$Gene,
+  List_DE_S1S3$ASPCs$Gene,
+  List_DE_S2S3$ASPCs$Gene
+  ))
+
+length(background_list_ASPCs)
+
+
+background_list_all<-unique(c(background_list_adipocytes,background_list_ASPCs,background_list_Myeloid_cells))
+length(background_list_all)
+
+```
+
+```{r}
+
+#adipocytes
+ego_result_Ads_S1 <- enrichGO(gene    = Adipocytes_S1,
+                            universe   = background_list_adipocytes,
+                            OrgDb        = org.Hs.eg.db,
+                            keyType      = "SYMBOL",
+                            ont          = "BP",         # "BP" (Biological Process), "MF", or "CC"
+                            pAdjustMethod = "BH",
+                            pvalueCutoff  = 1,
+                            qvalueCutoff  = 1,
+                            minGSSize = 1,
+                            readable      = TRUE)        # Converts Entrez IDs back to gene symbols
+
+View(ego_result_Ads_S1@result)
+
+
+ego_result_Ads_S23 <- enrichGO(gene    = Adipocytes_S23,
+                              universe   = as.vector(background_list_adipocytes),
+                              OrgDb        = org.Hs.eg.db,
+                              keyType      = "SYMBOL",
+                              ont          = "BP",         # "BP" (Biological Process), "MF", or "CC"
+                              pAdjustMethod = "BH",
+                              pvalueCutoff  = 1,
+                              qvalueCutoff  = 1,
+                              minGSSize = 1,
+                              readable      = TRUE)        # Converts Entrez IDs back to gene symbols
+
+View(ego_result_Ads_S23@result)
+
+ego_result_Ads_S3 <- enrichGO(gene    = Adipocytes_S3,
+                              universe   = as.vector(background_list_adipocytes),
+                              OrgDb        = org.Hs.eg.db,
+                              keyType      = "SYMBOL",
+                              ont          = "BP",         # "BP" (Biological Process), "MF", or "CC"
+                              pAdjustMethod = "BH",
+                              pvalueCutoff  = 1,
+                              qvalueCutoff  = 1,
+                              minGSSize = 1,
+                              readable      = TRUE)        # Converts Entrez IDs back to gene symbols
+
+View(ego_result_Ads_S3@result)
+
+```
+
+```{r}
+#Myeloid cells
+ego_result_Myeloid_S1 <- enrichGO(gene    = Myeloid_S1,
+                              universe   = as.vector(background_list_Myeloid_cells),
+                              OrgDb        = org.Hs.eg.db,
+                              keyType      = "SYMBOL",
+                              ont          = "BP",         # "BP" (Biological Process), "MF", or "CC"
+                              pAdjustMethod = "BH",
+                              pvalueCutoff  = 1,
+                              qvalueCutoff  = 1,
+                              minGSSize = 1,
+                              readable      = TRUE)        # Converts Entrez IDs back to gene symbols
+
+View(ego_result_Myeloid_S1@result)
+
+ego_result_Myeloid_S23 <- enrichGO(gene    = Myeloid_S23,
+                                         universe   = as.vector(background_list_Myeloid_cells),
+                                         OrgDb        = org.Hs.eg.db,
+                                         keyType      = "SYMBOL",
+                                         ont          = "BP",         # "BP" (Biological Process), "MF", or "CC"
+                                         pAdjustMethod = "BH",
+                                         pvalueCutoff  = 1,
+                                         qvalueCutoff  = 1,
+                                         minGSSize = 1,
+                                         readable      = TRUE)        # Converts Entrez IDs back to gene symbols
+View(ego_result_Myeloid_S23@result)
+
+ego_result_Myeloid_S3 <- enrichGO(gene    = Myeloid_S3,
+                                  universe   = as.vector(background_list_Myeloid_cells),
+                                  OrgDb        = org.Hs.eg.db,
+                                  keyType      = "SYMBOL",
+                                  ont          = "BP",         # "BP" (Biological Process), "MF", or "CC"
+                                  pAdjustMethod = "BH",
+                                  pvalueCutoff  = 1,
+                                  qvalueCutoff  = 1,
+                                  minGSSize = 1,
+                                  readable      = TRUE)        # Converts Entrez IDs back to gene symbols
+
+View(ego_result_Myeloid_S3@result)
+```
+
+```{r}
+#ASPC
+
+ego_result_ASPC_S12 <- enrichGO(gene    = ASPC_S12,
+                                     universe   = as.vector(background_list_ASPCs),
+                                     OrgDb        = org.Hs.eg.db,
+                                     keyType      = "SYMBOL",
+                                     ont          = c("BP"),         # "BP" (Biological Process), "MF", or "CC"
+                                     pAdjustMethod = "BH",
+                                     pvalueCutoff  = 1,
+                                     qvalueCutoff  = 1,
+                                     minGSSize = 1,
+                                     readable      = TRUE)        # Converts Entrez IDs back to gene symbols
+
+View(ego_result_ASPC_S12@result)
+                                
+
+ego_result_ASPC_S3 <- enrichGO(gene    = ASPC_S3,
+                                  universe   = as.vector(background_list_ASPCs),
+                                  OrgDb        = org.Hs.eg.db,
+                                  keyType      = "SYMBOL",
+                                  ont          = "BP",         # "BP" (Biological Process), "MF", or "CC"
+                                  pAdjustMethod = "BH",
+                                  pvalueCutoff  = 1,
+                                  qvalueCutoff  = 1,
+                                  minGSSize = 1,
+                                  readable      = TRUE)        # Converts Entrez IDs back to gene symbols
+
+View(ego_result_ASPC_S3@result)
+library(DOSE) 
+
+
+ego_simplified <- clusterProfiler::simplify(
+  ego_result_ASPC_S3,
+  cutoff = 0.1,         # This is a typical value; adjust as needed
+  by = "p.adjust",      # Chooses which GO term to keep when merging similar ones
+  select_fun = min      # Function to select the representative GO term
+)
+ 
+# Step 3: View results
+head(ego_simplified)
+
+
+
+BiocManager::install("GOSemSim")
+library(GOSemSim)
+
+
+ego_simplified <- clusterProfiler::simplify(ego_result_ASPC_S12, cutoff = 0.7, by = "p.adjust", select_fun = min) 
+
+
+
+                                                                                                        # Step 3: Adjust p-values AFTER simplification 
+                         # You may manually apply BH:
+ego_simplified@result$p.adjust <- p.adjust(ego_simplified@result$pvalue, method = "BH") 
+
+
+```
+
+```{r}
+
+
+
+# Named list of all enrichment results
+ego_results_list <- list(
+  Ads_S1 = ego_result_Ads_S1,
+  Ads_S23 = ego_result_Ads_S23,
+  Ads_S3 = ego_result_Ads_S3,
+  ASPC_S12 = ego_result_ASPC_S12,
+  ASPC_S3 = ego_result_ASPC_S3,
+  Myeloid_S1 = ego_result_Myeloid_S1,
+  Myeloid_S23 = ego_result_Myeloid_S23,
+  Myeloid_S3 = ego_result_Myeloid_S3
+)
+
+# Directory to save outputs (create if it doesn't exist)
+output_dir <- "/work/without_ambientRNAremoval/data/"
+
+
+# Simplify, adjust p-values, and save
+simplified_results <- lapply(names(ego_results_list), function(name) {
+  ego <- ego_results_list[[name]]
+  
+  
+  # Simplify
+  simplified <- clusterProfiler::simplify(
+    ego,
+    cutoff = 0.7,
+    by = "p.adjust",
+    select_fun = min
+  )
+  
+  # Adjust p-values (to be safe)
+  simplified@result$p.adjust <- p.adjust(simplified@result$pvalue, method = "BH")
+  
+  # Save using qsave
+  qsave(simplified, file = file.path(output_dir, paste0("ego_simplified_", name, ".qs")))
+  
+  return(simplified)
+})
+
+# Optionally name the list
+names(simplified_results) <- names(ego_results_list)
+
+```

@@ -1,0 +1,81 @@
+---
+title: "Overall UMAPs and Celltype annotation dotplots with selected markergenes"
+author: "Johanne D. Madsen"
+format: html
+editor: visual
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(ggplot2)
+library(magrittr)
+
+#Loading seurat object
+seurat_common <- qread("/data/seurat_object_annotated.qs")
+```
+
+```{r}
+
+snn_dim <- DimPlot(seurat_common,
+                   reduction = 'umap.snn',
+                   label.size = 3,
+                   label = F ,group.by = "Annotation")
+
+snn_saf <- DimPlot(seurat_common,
+                       reduction = 'umap.snn',
+                       group.by = "saf",
+                       label.size = 3)
+snn_donor <- DimPlot(seurat_common,
+                       reduction = 'umap.snn',
+                       group.by = "Donor",
+                       label.size = 3)
+
+
+#pdf("/figures/2A_global_UMAP_celltypes.pdf", width = 7, height = 5)
+print(snn_dim)
+#dev.off()
+
+
+#pdf("/figures/S2B_global_UMAP_donor.pdf", width = 7, height = 5)
+print(snn_donor)
+#dev.off()
+
+#pdf("/figures/S2C_global_UMAP_saf.pdf", width = 7, height = 5)
+print(snn_saf)
+#dev.off()
+
+```
+
+```{r, fig.height=7, fig.width=10}
+
+
+selected_markergenes <-(list( "Adipocytes"=c("ADIPOQ","PLIN1"),
+                              "Myeloid"=c("MRC1","LYVE1","SELENOP"),
+                              "ASPC"=c("DCN","PDGFRA"),
+                             "Endothel"=c("PECAM1","MECOM","CDH5"),
+                             "VMCs"=c("MYOCD","MYH11","STEAP4"),
+                             "T_cell"=c("CD3D","CD3E"),
+                             "B_cell"=c("MS4A1", "CD79A","IGKC"),
+                             "Mast"=c("CPA3","KIT"),
+                             "Schwann"=c("XKR4")
+                             ))
+
+
+celltypes <- c("Schwann_cells", "Mast_cells", "B_cells", "T_cells", 
+               "Vascular_mural_cells", "Endothelial_cells", "ASPCs", 
+               "Myeloid_cells", "Adipocytes")
+
+
+seurat_common$Annotation<-factor(seurat_common$Annotation, levels=celltypes)
+seurat_common <- SetIdent(seurat_common, value = seurat_common$Annotation)
+
+#pdf("/figures/2B_Dotplot_with_known_markers.pdf", width = 10, height = 7)
+DotPlot(seurat_common, features = selected_markergenes)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_blank())
+#dev.off()
+```

@@ -1,0 +1,211 @@
+---
+title: "Using lasso to infer LAM proportions in bulk RNAseq in endotypes"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: true
+  warning: false
+---
+
+```{r}
+library(readr)
+library(qs)
+library(dplyr)
+library(ggplot2)
+library(Seurat)
+library(tidyr)
+library(glmnet)
+library(caret)
+library(tidyverse)
+library(ggpubr)
+library(readxl)
+
+#Metadata til at plotte senere
+atlas_meta <- read_delim("/work/without_ambientRNAremoval/data-raw/ATLAS_Visit_1_Data_11_12_2024.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+SeqID <- read_delim("/work/Liver_WAT_crosstalk_snRNA_snMultiomeRNA/To_Johanne/SeqID.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+atlas_meta$SeqID<-SeqID[match(atlas_meta$recordid,SeqID$recordid ),]$SeqID
+
+#Markører for mine myeloide celle populationer
+MyeloidMarkers <- read_excel("/work/without_ambientRNAremoval/data/DElists/MyeloidMarkers.xlsx")
+
+#Udvælgelse af gener der er LAM markører og cutoff på signifikans, LFC og hvor mange procent celler genet er udtrykt i (LAM og ikke LAM)
+LAM_genes<-MyeloidMarkers[MyeloidMarkers$cluster=="LAM" & MyeloidMarkers$p_val_adj<0.000000001 & MyeloidMarkers$avg_log2FC>0.6 & MyeloidMarkers$pct.2<0.25&MyeloidMarkers$pct.1>0.05,]$gene
+
+
+```
+
+
+#
+```{r}
+
+vsd_corrected <- read_csv("/work/without_ambientRNAremoval/data-raw/vsd_corrected.csv")
+
+vsd_corrected <- as.data.frame(vsd_corrected)  # Convert tibble to data.frame
+rownames(vsd_corrected) <- vsd_corrected$...1  # Set row names as desired
+vsd_corrected$...1 <- NULL  # Optionally remove the column used for row names
+
+
+
+
+bulk_expr_scaled <- scale(vsd_corrected)
+
+# Convert to matrix format for glmnet
+X <- as.matrix(bulk_expr_scaled)
+
+
+X<-X[rownames(X)%in%LAM_genes,]
+```
+
+```{r}
+
+
+LAM_proportions<-qread("/work/without_ambientRNAremoval/data/LAM_proportions.qs")
+
+X <- t(X)
+X<-X[rownames(X) %in% LAM_proportions$SeqID,]
+
+
+y<-LAM_proportions[match(rownames(X),LAM_proportions$SeqID),]$LAM
+
+```
+
+
+
+```{r}
+
+set.seed(42)
+
+n <- nrow(X)  # Number of samples
+predictions <- rep(NA, n)
+
+# Leave-One-Out Cross-Validation (LOOCV)
+for (i in 1:n) {
+  # Leave out one sample
+  X_train <- X[-i, ]
+  y_train <- y[-i]
+  X_test <- X[i, , drop=FALSE]  # Single test sample
+  
+  # Train LASSO model on remaining samples
+  lasso_cv <- cv.glmnet(X_train, y_train, alpha = 1, nfolds = 5)
+  
+  # Predict on the left-out sample
+  predictions[i] <- predict(lasso_cv, newx = X_test, s = "lambda.min")
+}
+
+# Evaluate performance
+r2 <- cor(y, predictions)^2
+mae <- mean(abs(y - predictions))
+print(paste("LOOCV R²:", round(r2, 3)))
+print(paste("LOOCV MAE:", round(mae, 3)))
+
+# Now, train a final model on all data for visualization and gene selection
+lasso_cv_final <- cv.glmnet(X, y, alpha = 1, nfolds = 5)
+best_lambda <- lasso_cv_final$lambda.min
+lasso_model <- glmnet(X, y, alpha = 1, lambda = best_lambda)
+
+# Extract selected genes (ensure bulk_expr_scaled is available and its rownames correspond to gene names)
+selected_genes <- colnames(X)[which(coef(lasso_model)[-1] != 0)]
+print(paste("Selected", length(selected_genes), "genes"))
+
+# Predict on all samples using the final model
+y_pred <- predict(lasso_model, newx = X, s = best_lambda)
+
+# Create a scatter plot of actual vs. predicted values
+plot(y, y_pred, main = "LASSO Prediction Performance",
+     xlab = "Actual Proportion", ylab = "Predicted Proportion",
+     col = "blue", pch = 16)
+
+# Add a 45-degree perfect prediction line
+abline(0, 1, col = "red", lwd = 2)
+
+#kør denne hvis du vil se generne
+#selected_genes
+#kør denne hvis du vil se coefficienterne 
+#coef(lasso_model)
+```
+```{r}
+
+X_full<-bulk_expr_scaled[rownames(bulk_expr_scaled)%in%LAM_genes,]
+X_full<-as.matrix(X_full)
+X_full <- t(X_full)
+
+
+
+y_pred_full <-  predict(lasso_model, newx = X_full, s = best_lambda)
+
+```
+
+
+
+
+```{r, fig.width=10, fig.height=6}
+library(readr)
+atlas_metadata_clusters <- read_csv("/work/without_ambientRNAremoval/doc/formatted_atlas_metadata_forClustering_cluster.csv")
+
+
+atlas_metadata_clusters<-atlas_metadata_clusters[!is.na(atlas_metadata_clusters$Cluster),]
+
+
+all_dataClust_tool <- merge(atlas_meta, atlas_metadata_clusters[,c(1,8)], by.x = "recordid", by.y = "ID")
+
+y_pred_full_plotting<-as.data.frame(y_pred_full)
+
+all_dataClust_tool_LAM_LASSO<-all_dataClust_tool[all_dataClust_tool$SeqID %in% rownames(y_pred_full),]
+
+y_pred_full_plotting$clust<-all_dataClust_tool[match(rownames(y_pred_full_plotting),all_dataClust_tool$SeqID),]$Cluster
+
+y_pred_full_plotting<- y_pred_full_plotting%>%
+    .[!is.na(.$clust), ]
+
+y_pred_full_plotting$clust<- factor(y_pred_full_plotting$clust, levels=c("Control","Cardiometabolic SLD","Liver specific SLD"))
+
+
+```
+
+```{r, fig.width=4, fig.height=6}
+
+my_comparisons <- list(
+  c("Control", "Liver specific SLD"),
+  c("Control", "Cardiometabolic SLD"),
+  c("Liver specific SLD", "Cardiometabolic SLD")
+)
+
+
+ggplot(y_pred_full_plotting, aes(x = as.factor(clust), y = s1,fill = clust)) + 
+  geom_boxplot(outlier.shape = NA) +  # Fjern de automatiske outliers fra boxplot
+  geom_jitter(aes(color = as.factor(clust)),color = "grey", width = 0.2, size = 1.5, alpha = 0.7) +  # Tilføj de individuelle punkter
+  labs(x = "", y = "LAM LASSO model", title = "")+
+    theme_classic()+
+theme(legend.position = "none",axis.text = element_text(size = 12, face = "bold"),axis.text.x = element_text(angle = 40, hjust = 1))+ scale_fill_manual(values=c("grey", "red","cyan"))
+
+
+# Run the tests
+wilcox_res <- pairwise.wilcox.test(y_pred_full_plotting$s1, 
+                                    y_pred_full_plotting$clust, 
+                                    p.adjust.method = "BH")
+
+kruskal_res <- kruskal.test(y_pred_full_plotting$s1 ~ y_pred_full_plotting$clust)
+
+# Capture the printed output
+output_lines <- c(
+  "== Pairwise Wilcoxon Test ==",
+  capture.output(wilcox_res),
+  "",
+  "== Kruskal-Wallis Test ==",
+  capture.output(kruskal_res)
+)
+
+# Save to a .txt file
+writeLines(output_lines, "/work/without_ambientRNAremoval/figures/stats_LAM_endotypes.txt")
+
+
+```
+
+
+

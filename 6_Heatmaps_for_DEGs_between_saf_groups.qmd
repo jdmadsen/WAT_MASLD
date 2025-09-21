@@ -1,0 +1,301 @@
+---
+title: "Heatmaps for DEGs between saf groups"
+author: "Johanne D. Madsen"
+format: html
+editor: visual
+---
+
+```{r setup}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(cacoa)
+library(ggplot2)
+library(pheatmap)
+require(openxlsx)
+library(clusterProfiler)
+library(readxl)
+library(org.Hs.eg.db)
+
+options(Seurat.object.assay.version = "v3")
+n.cores = 32
+
+seurat_common <- qread("data/seurat_object_annotated.qs")
+set.seed(30)
+
+```
+
+#reading the excelfiles with DEGs for all five comparisons and modifying
+
+```{r, results="hide"}
+   
+ multiplesheets <- function(fname) { 
+    
+   # getting info about all excel sheets 
+   sheets <- readxl::excel_sheets(fname) 
+   tibble <- lapply(sheets, function(x) readxl::read_excel(fname, sheet = x,col_names=T)) 
+   data_frame <- lapply(tibble, as.data.frame) 
+     
+   # assigning names to data frames 
+   names(data_frame) <- sheets 
+     
+   # print data frame 
+   print(data_frame) 
+ } 
+   
+ # specifying the path name 
+List_DE_S1S2<-multiplesheets("data/DElists/List_DE_caoS1S2.xlsx")
+List_DE_S1S3<-multiplesheets("data/DElists/List_DE_caoS1S3.xlsx")
+List_DE_S2S3<-multiplesheets("data/DElists/List_DE_caoS2S3.xlsx")
+ 
+
+ 
+ List_DE_S1S2<-lapply(List_DE_S1S2, function(x){rownames(x)<-x[,1]
+return(x)} )
+ 
+ List_DE_S1S3<-lapply(List_DE_S1S3, function(x){rownames(x)<-x[,1]
+return(x)} )
+ 
+ List_DE_S2S3<-lapply(List_DE_S2S3, function(x){rownames(x)<-x[,1]
+return(x)} )
+```
+
+```{r, results="hide"}
+ #Filtering the lists by adjusted p-value
+ 
+ filtered_List_DE_S1S2<-lapply(List_DE_S1S2, function(x){
+ x[x$padj<0.1,]   
+   })
+ names(filtered_List_DE_S1S2)<-names(List_DE_S1S2)
+ 
+ 
+ filtered_List_DE_S1S3<-lapply(List_DE_S1S3, function(x){
+ x[x$padj<0.1,]   
+   })
+ names(filtered_List_DE_S1S3)<-names(List_DE_S1S3)
+ 
+ filtered_List_DE_S2S3<- lapply(List_DE_S2S3, function(x){
+ x[x$padj<0.1,]   
+   })
+ names(filtered_List_DE_S2S3)<-names(List_DE_S2S3)
+```
+
+```{r, results="hide"}
+# # Combine the row names from all five lists for each data frame
+#NB: I put 1:7 to exclude the undefined cluster. It was causing problems as they were not equally long 
+all_row_names <- lapply(seq_along(filtered_List_DE_S1S2[1:7]), function(i) {
+  row_names_S1vS2 <- rownames(filtered_List_DE_S1S2[[i]])
+   row_names_S1vS3 <- rownames(filtered_List_DE_S1S3[[i]])
+   row_names_S2vS3 <- rownames(filtered_List_DE_S2S3[[i]])
+   all_genes<-unique(c(row_names_S1vS2,row_names_S1vS3,row_names_S2vS3))
+ return(all_genes)}
+ )
+ 
+ names(all_row_names)<-names(filtered_List_DE_S1S2)[1:7]
+
+ 
+```
+
+```{r}
+(summary(all_row_names))[,1]  
+```
+
+```{r, results="hide"}
+seurat_bulk <- AverageExpression(seurat_common, return.seurat = TRUE, group.by = c('Donor','Annotation',"saf"))
+ 
+seurat_bulk <- NormalizeData(seurat_bulk)%>% FindVariableFeatures() %>% ScaleData()%>% RunPCA(npcs = 10)
+ 
+seurat_bulk$celltype <- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 2)
+seurat_bulk$Donor<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 1)
+seurat_bulk$saf<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 3)
+ 
+```
+
+#cluster order is 1,3,2
+
+```{r,fig.width=10, fig.height=10}
+Adipocytes_bulk<-seurat_bulk[,seurat_bulk@meta.data$celltype=="Adipocytes"]
+ 
+Adipocytes_bulk_DEG<-Adipocytes_bulk[rownames(Adipocytes_bulk) %in% all_row_names$Adipocytes,]
+
+ordered_Adipocytes_bulk_DEG_counts<-cbind(Adipocytes_bulk_DEG@assays$SCT$counts[,Adipocytes_bulk_DEG@meta.data$saf=="S1"],Adipocytes_bulk_DEG@assays$SCT$counts[,Adipocytes_bulk_DEG@meta.data$saf=="S2"],Adipocytes_bulk_DEG@assays$SCT$counts[,Adipocytes_bulk_DEG@meta.data$saf=="S3"])
+
+
+ann_colors = list(Adipocytes_Pseudobulk=c(S1="#00AFBB", S2="#E7B800", S3= "#FC4E07"))
+
+
+ 
+ordered_Adipocytes_bulk_DEG_manualscale<-apply(ordered_Adipocytes_bulk_DEG_counts, 1, function(x){
+   scale(x)
+   })
+
+rownames(ordered_Adipocytes_bulk_DEG_manualscale)<-colnames(ordered_Adipocytes_bulk_DEG_counts)
+ 
+ordered_Adipocytes_bulk_DEG_manualscale<-t(ordered_Adipocytes_bulk_DEG_manualscale)
+
+
+Adipocytes_Pseudobulk<-Adipocytes_bulk$saf
+
+Arch_order<-c(4,1,2,7,3,8,5,6,11,14,13,12,9,10,16,15,24,18,19,23,17,20,21,22)
+
+
+set.seed(30)
+
+Kmeans_adipocytes<-kmeans(ordered_Adipocytes_bulk_DEG_manualscale[,Arch_order], centers=3)
+
+Adipocytes_HM_kmeans<- cbind(ordered_Adipocytes_bulk_DEG_manualscale[,Arch_order], Kmeans_adipocytes$cluster) # combine the cluster with the matrix
+
+#dim(Adipocytes_HM_kmeans)
+# [1] 298  25
+# the last column is 25
+
+Adipocytes_HM_kmeans[, 25] <- factor(Adipocytes_HM_kmeans[, 25], levels = c(2, 1, 3))
+
+
+o<- order(Adipocytes_HM_kmeans[,25]) # order the last column
+
+Adipocytes_HM_kmeans<- Adipocytes_HM_kmeans[o,] # order the matrix according to the order of the last column
+
+#adjust based on how many clusters
+gaps<-c(table(Adipocytes_HM_kmeans[,25])[1],
+table(Adipocytes_HM_kmeans[,25])[1]+table(Adipocytes_HM_kmeans[,25])[2],
+table(Adipocytes_HM_kmeans[,25])[1]+table(Adipocytes_HM_kmeans[,25])[2]+table(Adipocytes_HM_kmeans[,25])[3])
+names(gaps)<-NULL
+
+
+blu_white<-colorRampPalette(c("#0072B2","white"),bias=1)
+white_yl<-colorRampPalette(c("white","#E69F00"),bias=1)
+yl_org<-colorRampPalette(c("#E69F00","#D55E00"),bias=1)
+col<-c(blu_white(140),white_yl(50),yl_org(150))
+
+Adipocytes_HM_manual_scale_counts<-pheatmap(Adipocytes_HM_kmeans[,1:24], cluster_cols = F,cluster_rows = F, annotation_col = data.frame(Adipocytes_Pseudobulk), show_colnames = F, annotation_colors = ann_colors,show_rownames = F , annotation_names_col = F,treeheight_row=0, gaps_row=gaps, main="Adipocyte DEGs, 1v1, kmeans clustering, pvalue cutoff 0.1",color=col)
+
+
+
+#pdf("figures/2H_Pseudobulk_heatmap_Adipocytes.pdf", width = 6, height = 5)
+
+Adipocytes_HM_manual_scale_counts
+
+#dev.off()
+```
+
+```{r,fig.width=10, fig.height=10}
+Myeloid_bulk<-seurat_bulk[,seurat_bulk@meta.data$celltype=="Myeloid-cells"]
+ 
+Myeloid_bulk_DEG<-Myeloid_bulk[rownames(Myeloid_bulk) %in% all_row_names$`Myeloid_cells`,]
+ 
+ordered_Myeloid_bulk_DEG_data<-cbind(Myeloid_bulk_DEG@assays$SCT$data[,Myeloid_bulk_DEG@meta.data$saf=="S1"],Myeloid_bulk_DEG@assays$SCT$data[,Myeloid_bulk_DEG@meta.data$saf=="S2"],Myeloid_bulk_DEG@assays$SCT$data[,Myeloid_bulk_DEG@meta.data$saf=="S3"])
+ 
+ordered_Myeloid_bulk_DEG_counts<-cbind(Myeloid_bulk_DEG@assays$SCT$counts[,Myeloid_bulk_DEG@meta.data$saf=="S1"],Myeloid_bulk_DEG@assays$SCT$counts[,Myeloid_bulk_DEG@meta.data$saf=="S2"],Myeloid_bulk_DEG@assays$SCT$counts[,Myeloid_bulk_DEG@meta.data$saf=="S3"])
+
+ordered_Myeloid_bulk_DEG_manualscale<-apply(ordered_Myeloid_bulk_DEG_counts, 1, function(x){
+   scale(x)
+   })
+rownames(ordered_Myeloid_bulk_DEG_manualscale)<-colnames(ordered_Myeloid_bulk_DEG_counts)
+
+ordered_Myeloid_bulk_DEG_manualscale<-t(ordered_Myeloid_bulk_DEG_manualscale)
+
+ann_colors = list(Immune_cells_Pseudobulk=c(S1="#00AFBB", S2="#E7B800", S3= "#FC4E07"))
+
+Immune_cells_Pseudobulk<-Myeloid_bulk$saf
+
+Kmeans_Myeloid<-kmeans(ordered_Myeloid_bulk_DEG_manualscale[,Arch_order], centers=3)
+
+
+Myeloid_HM_kmeans<- cbind(ordered_Myeloid_bulk_DEG_manualscale[,Arch_order], Kmeans_Myeloid$cluster) # combine the cluster with the matrix
+
+Myeloid_HM_kmeans[, 25] <- factor(Myeloid_HM_kmeans[, 25], levels = c(3, 1, 2))
+
+
+
+o<- order(Myeloid_HM_kmeans[,25]) # order the last column
+
+Myeloid_HM_kmeans<- Myeloid_HM_kmeans[o,] # order the matrix according to the order of the last column
+
+gaps<-c(table(Myeloid_HM_kmeans[,25])[1],
+table(Myeloid_HM_kmeans[,25])[1]+table(Myeloid_HM_kmeans[,25])[2])
+names(gaps)<-NULL
+
+
+
+Myeloid_HM_manual_scale_counts<-pheatmap(Myeloid_HM_kmeans[,1:24], cluster_cols = F,cluster_rows = F, annotation_col = data.frame(Immune_cells_Pseudobulk), annotation_names_col = F ,show_colnames = F,show_rownames = F,annotation_colors = ann_colors, cutree_rows = (h=3),treeheight_row=0,, gaps_row=gaps, main="Immune cell DEGs, 1v1, kmeans clustering, pvalue cutoff 0.1",color=col)
+
+
+
+#pdf("figures/2G_Pseudobulk_heatmap_Myeloid.pdf", width = 6, height = 5)
+
+Myeloid_HM_manual_scale_counts
+
+#dev.off()
+```
+
+```{r,fig.width=10, fig.height=10}
+
+
+ASPCs_bulk<-seurat_bulk[,seurat_bulk@meta.data$celltype=="ASPCs"]
+ 
+ASPCs_bulk_DEG<-ASPCs_bulk[rownames(ASPCs_bulk) %in% all_row_names$ASPCs,]
+
+ordered_ASPCs_bulk_DEG_data<-cbind(ASPCs_bulk_DEG@assays$SCT$data[,ASPCs_bulk_DEG@meta.data$saf=="S1"],ASPCs_bulk_DEG@assays$SCT$data[,ASPCs_bulk_DEG@meta.data$saf=="S2"],ASPCs_bulk_DEG@assays$SCT$data[,ASPCs_bulk_DEG@meta.data$saf=="S3"])
+ 
+ordered_ASPCs_bulk_DEG_counts<-cbind(ASPCs_bulk_DEG@assays$SCT$counts[,ASPCs_bulk_DEG@meta.data$saf=="S1"],ASPCs_bulk_DEG@assays$SCT$counts[,ASPCs_bulk_DEG@meta.data$saf=="S2"],ASPCs_bulk_DEG@assays$SCT$counts[,ASPCs_bulk_DEG@meta.data$saf=="S3"])
+
+ordered_ASPCs_bulk_DEG_manualscale<-apply(ordered_ASPCs_bulk_DEG_counts, 1, function(x){
+   scale(x)
+   })
+rownames(ordered_ASPCs_bulk_DEG_manualscale)<-colnames(ordered_ASPCs_bulk_DEG_counts)
+
+ordered_ASPCs_bulk_DEG_manualscale<-t(ordered_ASPCs_bulk_DEG_manualscale)
+
+ann_colors = list(ASPCs_Pseudobulk=c(S1="#00AFBB", S2="#E7B800", S3= "#FC4E07"))
+
+ASPCs_Pseudobulk<-ASPCs_bulk$saf
+
+
+set.seed(600)
+
+Kmeans_ASPCs<-kmeans(ordered_ASPCs_bulk_DEG_manualscale[,Arch_order], centers=2)
+
+ASPCs_HM_kmeans<- cbind(ordered_ASPCs_bulk_DEG_manualscale[,Arch_order], Kmeans_ASPCs$cluster) # combine the cluster with the matrix
+
+ASPCs_HM_kmeans[, 25] <- factor(ASPCs_HM_kmeans[, 25], levels = c(2, 1))
+
+o<- order(ASPCs_HM_kmeans[,25]) # order the last column
+
+ASPCs_HM_kmeans<- ASPCs_HM_kmeans[o,] # order the matrix according to the order of the last column
+
+gaps<-c(table(ASPCs_HM_kmeans[,25])[1],
+table(ASPCs_HM_kmeans[,25])[1]+table(ASPCs_HM_kmeans[,25])[2])
+names(gaps)<-NULL
+
+blu_white<-colorRampPalette(c("#0072B2","white"),bias=1)
+white_yl<-colorRampPalette(c("white","#E69F00"),bias=1)
+yl_org<-colorRampPalette(c("#E69F00","#D55E00"),bias=1)
+col<-c(blu_white(120),white_yl(50),yl_org(150))
+
+ASPCs_HM_manual_scale_counts<-pheatmap(ASPCs_HM_kmeans[,1:24], cluster_cols = F,cluster_rows = F, annotation_col = data.frame(ASPCs_Pseudobulk), annotation_names_col = F ,show_colnames = F,show_rownames = F,annotation_colors = ann_colors, cutree_rows = (h=3),treeheight_row=0, gaps_row=gaps, main="ASPC DEGs, 1v1, kmeans clustering, pvalue cutoff 0.1",color=col)#, labels_row=row.labs
+
+
+#pdf("figures/2I_Pseudobulk_heatmap_ASPC.pdf", width = 6, height = 5)
+
+ASPCs_HM_manual_scale_counts
+
+#dev.off()
+```
+
+```{r}
+
+ASPCs_HM_kmeans[ASPCs_HM_kmeans[,25]==1,25]
+ASPCs_HM_kmeans[ASPCs_HM_kmeans[,25]==2,25]
+
+Myeloid_HM_kmeans[Myeloid_HM_kmeans[,25]==1,25]
+Myeloid_HM_kmeans[Myeloid_HM_kmeans[,25]==2,25]
+Myeloid_HM_kmeans[Myeloid_HM_kmeans[,25]==3,25]
+
+Adipocytes_HM_kmeans[Adipocytes_HM_kmeans[, 25]==1,25]
+Adipocytes_HM_kmeans[Adipocytes_HM_kmeans[, 25]==2,25]
+Adipocytes_HM_kmeans[Adipocytes_HM_kmeans[, 25]==3,25]
+
+```

@@ -1,0 +1,393 @@
+---
+title: "Making Cacoa objects, DEG analysis and vulcanoplots, Boxplot with cell groupsizes"
+author: "Johanne D. Madsen"
+format: html
+editor: visual
+---
+
+```{r setup}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(cacoa)
+library(ggplot2)
+library(pheatmap)
+require(openxlsx)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+#options(Seurat.object.assay.version = "v3")
+n.cores = 32
+
+seurat_common <- qread("/data/seurat_object_annotated.qs")
+
+atlas_meta <- read_delim("/data-raw/ATLAS_Visit_1_Data_11_12_2024.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+atlas_meta$sample <- ifelse(atlas_meta$recordid %in% c(1:9),
+                           paste0("Donor_", atlas_meta$recordid, "_"),
+                           paste0("Donor_", atlas_meta$recordid))
+
+
+celltypes <-rev(c("Schwann_cells", "Mast_cells", "B_cells", "T_cells", 
+               "Vascular_mural_cells", "Endothelial_cells", "ASPCs", 
+               "Myeloid_cells", "Adipocytes"))
+```
+
+S1 v S3
+
+```{r}
+file_path <- "/data/caoS1vS3.qs"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  # Load the data
+  cao <- qread(file_path)
+} else {
+sample.groups<-atlas_meta$saf_diagnose
+names(sample.groups)<-atlas_meta$sample
+
+sample.groups<-sample.groups[sample.groups %in% c("1", "3")]
+
+seurat_common<-SetIdent(seurat_common,value=seurat_common$saf)
+
+SeuratS1S3<-subset(seurat_common, idents= c("S1","S3"))
+
+sample.groups<-sample.groups[names(sample.groups) %in% unique(SeuratS1S3@meta.data$Donor)]
+
+cao <- Cacoa$new(data.object = SeuratS1S3,  
+                 sample.groups=sample.groups,
+                 cell.groups=SeuratS1S3$Annotation,
+                 ref.level="1", 
+                 target.level="3",
+                 sample.per.cell= SeuratS1S3@meta.data$Donor %>%
+                   `names<-`(colnames(SeuratS1S3)),
+                 graph.name = "SCT_snn")
+cao$plot.params <- list(size=0.1, alpha=0.1, font.size=c(2, 3))
+
+cao$plot.theme <- cao$plot.theme + theme(legend.background=element_blank())
+
+
+cao$estimateExpressionShiftMagnitudes()
+cao$estimateCellLoadings()
+cao$estimateDEPerCellType(independent.filtering=TRUE, test='DESeq2.Wald', verbose=FALSE)
+#qsave(cao,"/data/caoS1vS3.qs")
+}
+cao$plotExpressionShiftMagnitudes()
+cao$plotCellLoadings(show.pvals=T)
+cao$plotCellGroupSizes()+ scale_fill_discrete(breaks=c("1","3"))+
+    scale_fill_manual(values=c("#00AFBB", "#FC4E07"))
+```
+
+```{r, fig.width=20, fig.height=7}
+
+#removing B-cells as we don't have enough cells in all donors
+celltypes<-rev(c("Schwann_cells", "Mast_cells", "T_cells", 
+               "Vascular_mural_cells", "Endothelial_cells", "ASPCs", 
+               "Myeloid_cells", "Adipocytes"))
+
+
+
+plot_list <- list()
+for (i in 1:length(celltypes)) {
+  plot <- cao$plotVolcano(cell.types = c(celltypes[i]), 
+                          xlim = c(-3, 3), 
+                          ylim = c(0, 3.5), 
+                          lf.cutoff = 0, 
+                          n.col = 3, 
+                          p.cutoff = 0.1) + 
+    ggtitle(celltypes[i]) + 
+    theme_classic()
+
+  # remove legend from all exept the first plot
+  if (i != 8) {
+    plot <- plot + theme(legend.position = "none")
+  }
+
+  plot_list[[i]] <- plot
+}
+
+
+
+#pdf("/figures/S2E2_vulcano_S1vS3.pdf", width = 20, height = 7)
+
+wrap_plots(plot_list, ncol = 4) +
+  plot_annotation(title = "SAF1 vs SAF3 DEGs")
+
+#dev.off()
+
+```
+
+```{r}
+file_path <- "/data/DElists/List_DE_caoS1S3.xlsx"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  # Load the data
+    require(openxlsx)  
+    DElist <- read.xlsx(file_path)
+} else {
+
+DElist<-lapply(cao$test.results$de,function(x){x$res})
+
+require(openxlsx)
+write.xlsx(DElist, file = "/data/DElists/List_DE_caoS1S3.xlsx",
+           colNames = TRUE, rowNames = TRUE)
+} 
+
+```
+
+S1 v S2
+
+```{r}
+file_path <- "/data/caoS1vS2.qs"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  # Load the data
+  cao <- qread(file_path)
+} else {
+sample.groups<-atlas_meta$saf_diagnose
+names(sample.groups)<-atlas_meta$sample
+
+sample.groups<-sample.groups[sample.groups %in% c("1", "2")]
+
+seurat_common<-SetIdent(seurat_common,value=seurat_common$saf)
+
+SeuratS1S2<-subset(seurat_common, idents= c("S1","S2"))
+
+sample.groups<-sample.groups[names(sample.groups) %in% unique(SeuratS1S2@meta.data$Donor)]
+
+cao <- Cacoa$new(data.object = SeuratS1S2,  
+                 sample.groups=sample.groups,
+                 cell.groups=SeuratS1S2$Annotation,
+                 ref.level="1", 
+                 target.level="2",
+                 sample.per.cell= SeuratS1S2@meta.data$Donor %>%
+                   `names<-`(colnames(SeuratS1S2)),
+                 graph.name = "SCT_snn")
+cao$plot.params <- list(size=0.1, alpha=0.1, font.size=c(2, 3))
+
+cao$plot.theme <- cao$plot.theme + theme(legend.background=element_blank())
+cao$estimateExpressionShiftMagnitudes()
+cao$estimateCellLoadings()
+cao$estimateDEPerCellType(independent.filtering=TRUE, test='DESeq2.Wald', verbose=FALSE)
+#qsave(cao,"/data/caoS1vS2.qs")
+}
+
+
+cao$plotExpressionShiftMagnitudes()
+cao$plotCellLoadings(show.pvals=T)
+cao$plotCellGroupSizes()+ scale_fill_discrete(breaks=c("1","2"))+
+    scale_fill_manual(values=c("#00AFBB", "#E7B800"))
+```
+
+```{r, fig.width=4, fig.height=3}
+#removing schwann cells as we don't have enough cells in all donors
+celltypes<-rev(c("Mast_cells", "T_cells", 
+               "Vascular_mural_cells", "Endothelial_cells", "ASPCs", 
+               "Myeloid_cells", "Adipocytes"))
+
+
+plot_list <- list()
+for (i in 1:length(celltypes)) {
+  plot <- cao$plotVolcano(cell.types = c(celltypes[i]), 
+                          xlim = c(-3, 3), 
+                          ylim = c(0, 3.5), 
+                          lf.cutoff = 0, 
+                          n.col = 3, 
+                          p.cutoff = 0.1) + 
+    ggtitle(celltypes[i]) + 
+    theme_classic()
+
+
+  if (i != 8) {
+    plot <- plot + theme(legend.position = "none")
+  }
+
+  plot_list[[i]] <- plot
+}
+
+
+#pdf("/figures/S2E1_vulcano_S1vS2.pdf", width = 20, height = 7)
+
+wrap_plots(plot_list, ncol = 4) +
+  plot_annotation(title = "SAF1 vs SAF2 DEGs")
+
+#dev.off()
+```
+
+```{r}
+file_path <- "/data/DElists/List_DE_caoS1S2.xlsx"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  # Load the data
+    require(openxlsx)  
+    DElist <- read.xlsx(file_path)
+} else {
+
+DElist<-lapply(cao$test.results$de,function(x){x$res})
+
+require(openxlsx)
+write.xlsx(DElist, file = "/data/DElists/List_DE_caoS1S2.xlsx",
+           colNames = TRUE, rowNames = TRUE)
+} 
+
+```
+
+S2 v S3
+
+```{r}
+file_path <- "/data/caoS2vS3.qs"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  # Load the data
+  cao <- qread(file_path)
+} else {
+
+sample.groups<-atlas_meta$saf_diagnose
+names(sample.groups)<-atlas_meta$sample
+
+sample.groups<-sample.groups[sample.groups %in% c("2", "3")]
+
+seurat_common<-SetIdent(seurat_common,value=seurat_common$saf)
+
+SeuratS2S3<-subset(seurat_common, idents= c("S2","S3"))
+
+sample.groups<-sample.groups[names(sample.groups) %in% unique(SeuratS2S3@meta.data$Donor)]
+
+cao <- Cacoa$new(data.object = SeuratS2S3,  
+                 sample.groups=sample.groups,
+                 cell.groups=SeuratS2S3$Annotation,
+                 ref.level="2", 
+                 target.level="3",
+                 sample.per.cell= SeuratS2S3@meta.data$Donor %>%
+                   `names<-`(colnames(SeuratS2S3)),
+                 graph.name = "SCT_snn")
+cao$estimateExpressionShiftMagnitudes()
+cao$estimateCellLoadings()
+cao$estimateDEPerCellType(independent.filtering=TRUE, test='DESeq2.Wald', verbose=FALSE)
+#qsave(cao,"/data/caoS2vS3.qs")
+}
+
+cao$plot.params <- list(size=0.1, alpha=0.1, font.size=c(2, 3))
+
+cao$plot.theme <- cao$plot.theme + theme(legend.background=element_blank())
+
+
+cao$plotExpressionShiftMagnitudes()
+cao$plotCellLoadings(show.pvals=T)
+cao$plotCellGroupSizes()+ scale_fill_discrete(breaks=c("2","3"))+
+    scale_fill_manual(values=c( "#E7B800","#FC4E07"))
+```
+
+```{r, fig.width=10, fig.height=12}
+
+plot_list <- list()
+for (i in 1:length(celltypes)) {
+  plot <- cao$plotVolcano(cell.types = c(celltypes[i]), 
+                          xlim = c(-3, 3), 
+                          ylim = c(0, 3.5), 
+                          lf.cutoff = 0, 
+                          n.col = 3, 
+                          p.cutoff = 0.1) + 
+    ggtitle(celltypes[i]) + 
+    theme_classic()
+
+  # Fjern legend fra alle undtagen det første plot
+  if (i != 8) {
+    plot <- plot + theme(legend.position = "none")
+  }
+
+  plot_list[[i]] <- plot
+}
+
+
+#pdf("/figures/S2E1_vulcano_S2vS3.pdf", width = 20, height = 7)
+
+wrap_plots(plot_list, ncol = 4) +
+  plot_annotation(title = "SAF2 vs SAF3 DEGs")
+
+#dev.off()
+```
+
+```{r, fig.width=10, fig.height=12}
+
+file_path <- "/data/DElists/List_DE_caoS2S3.xlsx"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+print("List_DE_caoS2S3.xlsx exists")
+} else {
+
+DElist<-lapply(cao$test.results$de,function(x){x$res})
+
+require(openxlsx)
+write.xlsx(DElist, file = "/data/DElists/List_DE_caoS2S3.xlsx",
+           colNames = TRUE, rowNames = TRUE)
+} 
+
+```
+
+Boxplot with cell groupsizes with all three SAF scores
+
+```{r}
+
+sample.groups<-atlas_meta$saf_diagnose
+names(sample.groups)<-atlas_meta$sample
+
+seurat_common<-SetIdent(seurat_common,value=seurat_common$saf)
+
+sample.groups<-sample.groups[names(sample.groups) %in% unique(seurat_common@meta.data$Donor)]
+
+cao <- Cacoa$new(data.object = seurat_common,
+                 cell.groups=seurat_common$Annotation,
+                 ref.level="2", 
+                 target.level="3",
+                 sample.per.cell= seurat_common@meta.data$Donor %>%
+                   `names<-`(colnames(seurat_common)),
+                 n.cores = 16,
+                 sample.groups = sample.groups %>%
+                   gsub(1, 2, .) %>%
+                   `names<-`(sample.groups %>%
+                               names()))
+
+cao$sample.groups <- sample.groups %>%
+  `names<-`(sample.groups %>%
+              names())
+
+cao$sample.groups<-factor(cao$sample.groups)
+
+celltypes <-rev(c("Schwann_cells", "Mast_cells", "B_cells", "T_cells", 
+               "Vascular_mural_cells", "Endothelial_cells", "ASPCs", 
+               "Myeloid_cells", "Adipocytes"))
+
+
+
+cao$cell.groups<-factor(cao$cell.groups, levels=celltypes)
+
+
+cao$plotCellGroupSizes(show.significance =T)+ scale_fill_discrete(breaks=c("1","2","3"))+
+    scale_fill_manual(values=c("#00AFBB", "#E7B800", "#FC4E07"))+ theme_classic()+theme(axis.title.x=element_blank(),axis.text.x = element_text(angle = 90, hjust=1))
+
+
+g<-cao$plotCellGroupSizes(show.significance =T)+ scale_fill_discrete(breaks=c("1","2","3"))+
+    scale_fill_manual(values=c("#00AFBB", "#E7B800", "#FC4E07"))+ theme_classic()+theme(axis.title.x=element_blank(),axis.text.x = element_text(angle = 90, hjust=1))
+
+#pdf("/figures/2C_celltype_proportions.pdf", width = 7, height = 5)
+
+wrap_plots(g+ scale_x_discrete(limits = levels(g$data$variable)[1:4])+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust = 1)),
+g+ scale_x_discrete(limits = levels(g$data$variable)[5:9])+ ylim(0, 15)+theme(axis.title.y = element_blank(),axis.text.x = element_text(angle = 45, hjust = 1)))
+
+#dev.off()
+
+
+
+```
+
+statistics available in separate statistics document

@@ -1,0 +1,111 @@
+---
+title: "Annotation of cell types"
+author: "Johanne D. Madsen, Aino R. Peltonen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+#| message: false
+library(magrittr)
+library(dplyr)
+library(CRMetrics)
+library(knitr)
+library(sccore)
+library(qs)
+library(scHelper)
+library(parallel)
+library(pagoda2)
+library(conos)
+library(cowplot)
+library(ggplot2)
+library(DESeq2)
+library(tidyr)
+library(DelayedMatrixStats)
+library(Seurat)
+library(scCustomize)
+
+#is important for it to work with cacoa later
+options(Seurat.object.assay.version = "v3")
+n.cores = 32
+```
+
+```{r chunk 1}
+seurat_common <- qread("/work/without_ambientRNAremoval/seurat_common_reclustered.qs")
+```
+
+
+```{r chunk 5}
+new_names <- c("Endothelial_1","Myeloid_cells_1","ASPCs","Adipocytes","SMCs",
+               "Endothelial_2",  "T-cells", "Mast_cells","Schwann_B_cells")
+
+
+
+names(new_names) <- levels(seurat_common)
+
+
+seurat_common <- RenameIdents(object = seurat_common, new_names)
+
+snn_ann <- DimPlot(seurat_common,reduction = 'umap.snn', label = TRUE) + NoLegend()
+
+
+```
+
+Schwann and b-cells did not separate naturally (likely because schwann cells are rare) so I forced them apart manually. I did this by increasing the clustering resolution until they formed separate clusters and used that information to annotate them correctly in this object. I also renamed Smooth_Muscle_cells to vascular mural cells when i learned that was the accurate term. 
+```{r chunk 6} 
+
+seurat_common$Label <- 1
+seurat_common@meta.data[ seurat_common@meta.data$seurat_clusters == "0","Label"] <- 1 
+seurat_common@meta.data[ seurat_common@meta.data$seurat_clusters == "1","Label"] <- 2
+seurat_common@meta.data[ seurat_common@meta.data$seurat_clusters == "2","Label"] <- 3
+seurat_common@meta.data[ seurat_common@meta.data$seurat_clusters == "3","Label"] <- 4
+seurat_common@meta.data[ seurat_common@meta.data$seurat_clusters == "4","Label"] <- 5
+seurat_common@meta.data[ seurat_common@meta.data$seurat_clusters == "5","Label"] <- 1
+seurat_common@meta.data[ seurat_common@meta.data$seurat_clusters == "6","Label"] <- 6
+seurat_common@meta.data[ seurat_common@meta.data$seurat_clusters == "7","Label"] <- 7
+seurat_common@meta.data[ seurat_common@meta.data$seurat_clusters == "8","Label"] <- 8
+
+
+
+  
+seurat_common@meta.data$Label <- factor(x = seurat_common$Label, levels = c("1", "2", "3", "4", "5", "6", "7", "8"))
+seurat_common <- SetIdent(seurat_common, value = seurat_common$Label) #Sets the identity class value for cells
+
+snn<-DimPlot(seurat_common,reduction = 'umap.snn', label = TRUE, group.by = "Label") + NoLegend()
+snn
+
+
+## Fix cluster labels
+seurat_common$Annotation <- "NA"
+seurat_common@meta.data[ seurat_common@meta.data$Label %in% 1,"Annotation"] <- "Endothelial_cells" 
+seurat_common@meta.data[ seurat_common@meta.data$Label %in% 2,"Annotation"] <- "Myeloid_cells"
+seurat_common@meta.data[ seurat_common@meta.data$Label %in% 3,"Annotation"] <- "ASPCs"
+seurat_common@meta.data[ seurat_common@meta.data$Label %in% 4,"Annotation"] <- "Adipocytes"
+seurat_common@meta.data[ seurat_common@meta.data$Label %in% 5,"Annotation"] <- "Smooth_Muscle_cells"
+seurat_common@meta.data[ seurat_common@meta.data$Label %in% 6,"Annotation"] <- "T_cells"
+seurat_common@meta.data[ seurat_common@meta.data$Label %in% 7,"Annotation"] <- "Mast_cells"
+seurat_common@meta.data[ seurat_common@meta.data$Label %in% 8,"Annotation"] <- "Schwann_and_B_cells"
+
+seurat_common@meta.data$seurat_clusters <- factor(x = seurat_common$seurat_clusters, 
+                                                  levels = c("Endothelial_cells","Myeloid_cells","ASPCs","Adipocytes","Smooth_Muscle_cells", "T_cells","Mast_cells","Schwann_and_B_cells"))
+
+seurat_common <- SetIdent(seurat_common, value = seurat_common$Annotation) #Sets the identity class value for cells
+
+DimPlot(seurat_common,reduction = 'umap.snn', label = TRUE) + NoLegend()
+
+
+
+qsave(seurat_common, "/work/without_ambientRNAremoval/data/seurat_object_annotated.qs")
+
+```
+
+
+```{r info}
+sessionInfo()
+```
+

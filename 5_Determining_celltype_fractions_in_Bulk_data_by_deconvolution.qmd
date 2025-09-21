@@ -1,0 +1,212 @@
+---
+title: "Determining celltype fractions in Bulk data by deconvolution"
+author: "Johanne D. Madsen"
+format: html
+editor: visual
+---
+
+```{r setup}
+#| message: false
+library(TED)
+library(here)
+library(Seurat)
+library(qs)
+library(DESeq2)
+library(sva)
+library(mgcv)
+library(nlme)
+library(genefilter)
+library(BiocParallel)
+library(dplyr)
+library(tidyr)
+library(ggpubr)
+library(rstatix)
+library(ggplot2)
+library(purrr)
+
+seurat_common<-qread("/data/seurat_object_annotated.qs")
+
+atlas_meta <- read_delim("/work/without_ambientRNAremoval/data-raw/ATLAS_Visit_1_Data_11_12_2024_with_sample_seqround.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+
+
+```
+
+```{r}
+file_path <- "/work/without_ambientRNAremoval/data/ref.dat.filtered.txt"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  print("Done")
+} else {
+counts <- as.data.frame(seurat_common@assays$RNA@counts)
+head(counts)
+
+t_counts <- as.data.frame(t(counts))
+} 
+
+```
+
+```{r}
+file_path <- "/work/without_ambientRNAremoval/data/t_meta.txt"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  # Read the file if it exists
+  t_meta <- read.delim(file_path)
+} else {
+
+t_meta <- seurat_common@meta.data
+
+write.table(t_meta, file= file_path, sep="\t",  quote=F, row.names=T )
+}
+
+```
+
+```{r}
+
+file_path <- "/work/without_ambientRNAremoval/data/ref.dat.filtered.txt"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  # Read the file if it exists
+  ref.dat.filtered <- read.delim(file_path)
+} else {
+  # Perform cleanup and write to file if it doesn't exist
+  ref.dat.filtered <- cleanup.genes(ref.dat= t_counts,
+                                    species="hs",
+                                    gene.type=c("RB", "chrM", "chrX", "chrY"),
+                                    input.type="scRNA",
+                                    exp.cells=5)
+  write.table(ref.dat.filtered, file=file_path, sep="\t", quote=FALSE, row.names=TRUE)
+}
+
+
+```
+
+
+```{r}
+counts<- read.delim("/work/with_ambientRNAremoval/data-raw/Human_NASH_All.txt",h=T)
+file_path <- "/work/without_ambientRNAremoval/data/Cell_type_fractions_meta_pivot.txt"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  # Read the file if it exists
+  print("Done")
+} else {
+meta<-as.data.frame(atlas_meta)
+
+meta<-meta[meta$Seq_Round %in% c("A", "B"),]
+
+
+rownames(meta)<-meta[,"SeqID"]
+
+
+meta<-meta[order(row.names(meta)), ]
+
+rownames(counts) <- counts$Symbol
+countData <- counts[,9:104] #Select data of interest from dataframe
+countData <- as.matrix(countData[apply(countData,1,max)>40,]) #Transform to matrix and keep only the rows where the maximum value in that row is above 40
+countData<-countData[,order(colnames(countData)) ]
+
+
+colnames(countData)== rownames(meta)
+
+#removing outliers
+countData<-countData[,!colnames(countData)=="D28_V1_SAT.bam"]
+countData<-countData[,!colnames(countData)=="D97_V1_SAT.bam"]
+countData<-countData[,!colnames(countData)=="D99_V1_SAT.bam"]
+meta<-meta[!rownames(meta)=="D28_V1_SAT.bam",]
+meta<-meta[!rownames(meta)=="D97_V1_SAT.bam",]
+meta<-meta[!rownames(meta)=="D99_V1_SAT.bam",]
+
+
+#===================batch-correct based on seq_round=========================
+batches = sapply(as.character(meta$Seq_Round), switch, "B" = 2, "A" = 1, USE.NAMES = F)
+groups = sapply(as.character(meta$saf_diagnose), switch, "1" = 1, "2" = 2, "3" = 3, USE.NAMES = F)
+corrected_data = ComBat_seq(counts = as.matrix(countData), batch = batches, group = groups)
+corrected_data_df=as.data.frame(corrected_data)
+corrected_data_df=corrected_data_df %>% dplyr::select(sort(colnames(.)))
+
+
+data_corr <- as.data.frame(t(corrected_data_df))
+
+
+t_data_corr <- data.matrix(data_corr)
+}
+```
+
+```{r}
+
+file_path <- "/data/Cell_type_fractions_meta_pivot.txt"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  # Read the file if it exists
+  ref.dat.filtered <- read.delim(file_path)
+} else {
+tcga.ted <- run.Ted(ref.dat = as.matrix(ref.dat.filtered),
+                    X = as.matrix(t_data_corr),
+                    cell.type.labels = as.matrix(t_meta$Annotation),
+                    input.type = "scRNA",
+                    n.cores = 32)
+}
+```
+
+
+
+```{r}
+file_path <- "/data/Cell_type_fractions_meta_pivot.txt"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  # Read the file if it exists
+  print("Done")
+} else {
+
+Cell_type_fractions=as.data.frame(tcga.ted$res$final.gibbs.theta)
+Cell_type_fractions$SeqID = rownames(Cell_type_fractions)
+Cell_type_fractions_meta=merge(Cell_type_fractions, atlas_meta, by="SeqID")
+}
+```
+
+```{r, fig.height=5, fig.width=6}
+file_path <- "/data/Cell_type_fractions_meta_pivot.txt"
+
+# Check if the file exists
+if (file.exists(file_path)) {
+  # Read the file if it exists
+ Cell_type_fractions_meta_pivot <- read.delim(file_path)
+} else {
+
+Cell_type_fractions_meta_pivot<-Cell_type_fractions_meta %>% pivot_longer(cols=colnames(Cell_type_fractions_meta[,2:9]),
+                    names_to='Cell_type',
+                    values_to='Fraction')
+ write.table(Cell_type_fractions_meta_pivot, file=file_path, sep="\t", quote=FALSE, row.names=TRUE)
+}
+```
+
+```{r, fig.height=5, fig.width=6}
+Cell_type_fractions_meta_pivot<-Cell_type_fractions_meta_pivot[Cell_type_fractions_meta_pivot$Cell_type %in% c("Myeloid_cells","ASPCs","Smooth_Muscle_cells", "Endothelial_cells", "Adipocytes","T_cells"),]
+
+
+Original_female_ids<-meta[meta$gender=="1",]$recordid
+
+Cell_type_fractions_meta_pivot_FEM<-Cell_type_fractions_meta_pivot[Cell_type_fractions_meta_pivot$recordid %in% Original_female_ids,]
+
+#pdf("/figures/2D_Deconvoluted_celltype_proportions_fem.pdf", width = 5, height = 5)
+
+
+ggplot(Cell_type_fractions_meta_pivot_FEM, aes(x = Cell_type, y = Fraction * 100, fill = saf_diagnose)) +
+  geom_boxplot(outlier.size = 0) +
+  geom_point(alpha = 0.2, size = 0.5, position = position_jitterdodge(jitter.height = 0, jitter.width = 0.1)) +
+  scale_fill_manual(values = c("#00AFBB", "#E7B800", "#FC4E07")) +
+  theme_classic() +
+  theme(axis.title.x = element_blank(), axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ylab("Deconvoluted Cells per Donor (%)") +
+  theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust = 1))
+#dev.off()
+
+
+```

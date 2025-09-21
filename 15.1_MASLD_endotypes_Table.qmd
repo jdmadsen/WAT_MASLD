@@ -1,0 +1,511 @@
+---
+title: "ATLAS visit1 metadata clustering results"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r}
+library(DESeq2)
+library(xfun)
+library(sva)
+library(edgeR)
+library(limma)
+library(ggplot2)
+library(R.utils)
+library(readr)
+library(qs)
+library(dplyr)
+library(cluster)
+#library(fpc)
+library(ggrepel)
+library(ggpubr)
+library(fmsb)
+library(sqldf)
+library(ggradar)
+library(limma)
+library(stringr)
+library(eulerr)
+library(clusterProfiler)
+library(dunn.test)
+library(DT)
+library(pheatmap)
+library(tidyr)
+library(rstatix)
+library(knitr)
+library(kableExtra)
+
+
+atlas_meta <- read_delim("/work/without_ambientRNAremoval/data-raw/ATLAS_Visit_1_Data_11_12_2024.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+library(readr)
+
+#reading in supplementary data on medications
+meta2<- read_table("/work/without_ambientRNAremoval/data/OP551PROMETHEUSProgn_DATA_2025-06-10_0936.tsv")
+
+meta2
+
+meta2<-meta2[,!colnames(meta2) %in% colnames(atlas_meta)[2:187]]
+
+atlas_meta<-merge(atlas_meta, meta2,  by="recordid")
+
+clinVar_clust <- c("bmi_3e5d68","alder","alat","ldl","hba1c","triglycerider")
+```
+
+
+
+```{r}
+
+
+atlas_metadata_clusters <- read_csv("/work/without_ambientRNAremoval/doc/formatted_atlas_metadata_forClustering_cluster.csv")
+
+table(atlas_metadata_clusters$Cluster)
+
+atlas_metadata_clusters<-atlas_metadata_clusters[!is.na(atlas_metadata_clusters$Cluster),]
+
+
+all_dataClust_tool <- merge(atlas_meta, atlas_metadata_clusters[,c(1,8)], by.x = "recordid", by.y = "ID")
+
+data_tool_extvar<-all_dataClust_tool[,c(clinVar_clust,"insulin","c_peptid","hdl","asat","total_cholesterol","waist","liverfat_pct","b_glucose","Cluster","med_dm___8","med_type___1","med_type___3","med_type___4","nafld_activity_score","nas1","nas2","nas3","kleiner_fibrose_grad","saf_diagnose")]
+
+
+
+
+```
+
+```{r}
+#excluding patients on insulin
+
+data_tool_extvar <- data_tool_extvar %>%
+  mutate(`insulin` = case_when(
+    med_dm___8 == 1 ~ NA_real_,  # Replace with NA if patient takes insulin
+    TRUE ~ `insulin`
+  ))
+
+
+
+data_tool_extvar<-as.data.frame(data_tool_extvar)
+
+data_tool_extvar <- data_tool_extvar %>%
+  mutate(insulin_IU_l= insulin/6) 
+
+#calculating percentages 
+
+percentages <- data_tool_extvar %>%
+  group_by(Cluster) %>%
+  summarize(
+    med_type___1 = mean(med_type___1 == 1, na.rm = TRUE) * 100,
+    med_type___3 = mean(med_type___3 == 1, na.rm = TRUE) * 100,
+    med_type___4 = mean(med_type___4 == 1, na.rm = TRUE) * 100,
+    nas1_binary = mean(nas1 > 0, na.rm = TRUE) * 100,
+    nas2_binary = mean(nas2 > 0, na.rm = TRUE) * 100,
+    nas3_binary = mean(nas3 > 0, na.rm = TRUE) * 100,
+    fibrosis_binary = mean(kleiner_fibrose_grad > 1, na.rm = TRUE) * 100,
+    fibrosis_severe_binary = mean(kleiner_fibrose_grad > 2, na.rm = TRUE) * 100,
+    MASH_binary = mean(saf_diagnose == 3, na.rm = TRUE) * 100    
+  ) %>%
+  mutate(across(where(is.numeric), round, 2))
+
+
+
+```
+
+
+```{r}
+#calculating binary data for statistics
+
+data_tool_extvar <- data_tool_extvar %>%
+  mutate(
+    nas1_binary = ifelse(is.na(nas1), NA, ifelse(nas1 > 0, 1, 0)),
+    nas2_binary = ifelse(is.na(nas2), NA, ifelse(nas2 > 0, 1, 0)),
+    nas3_binary = ifelse(is.na(nas3), NA, ifelse(nas3 > 0, 1, 0)),
+    fibrosis_binary = ifelse(is.na(kleiner_fibrose_grad), NA, ifelse(kleiner_fibrose_grad > 1, 1, 0)),
+    fibrosis_severe_binary = ifelse(is.na(kleiner_fibrose_grad), NA, ifelse(kleiner_fibrose_grad > 2, 1, 0)),
+    MASH_binary = ifelse(is.na(saf_diagnose), NA, ifelse(saf_diagnose == 3, 1, 0))
+  )
+
+```
+
+```{r}
+# List of all binary features to test
+binary_features <- c("med_type___1", "med_type___3", "med_type___4",
+                     "nas1_binary", "nas2_binary", "nas3_binary",
+                     "fibrosis_binary", "fibrosis_severe_binary", "MASH_binary")
+
+# Empty results data frame
+pairwise_results_all <- data.frame()
+
+# Loop through each feature
+for (feature in binary_features) {
+  for (clust_pair in combn(unique(data_tool_extvar$Cluster), 2, simplify = FALSE)) {
+    
+    # Filter and select only relevant rows
+    data_subset <- data_tool_extvar %>%
+      filter(Cluster %in% clust_pair) %>%
+      select(Cluster, all_of(feature)) %>%
+      filter(!is.na(.data[[feature]]))  # Remove rows with NA for the feature
+    
+    # Check if there is enough variability to perform test
+    if (length(unique(data_subset[[feature]])) > 1) {
+      contingency_table <- table(data_subset$Cluster, data_subset[[feature]])
+      test_result <- fisher.test(contingency_table)
+      p_value <- test_result$p.value
+      
+      # Store result
+      pairwise_results_all <- rbind(pairwise_results_all, data.frame(
+        Feature = feature,
+        Cluster_Comparison = paste(clust_pair, collapse = " vs "),
+        P_value = p_value
+      ))
+    }
+  }
+}
+
+# Adjust p-values for multiple testing
+pairwise_results_all$Adjusted_P_value <- p.adjust(pairwise_results_all$P_value, method = "BH")
+
+# Clean up display
+pairwise_results_percentages <- pairwise_results_all %>%
+  mutate(Adjusted_P_value = ifelse(Adjusted_P_value < 0.001, "<0.001", round(Adjusted_P_value, 4)))
+
+pairwise_results_percentages
+
+
+############
+
+
+test_results_percentages <- data_tool_extvar %>%
+  select(Cluster,c(binary_features)) %>%
+  pivot_longer(cols = c(binary_features), names_to = "Feature", values_to = "Usage") %>%
+  group_by(Feature) %>%
+  summarize(
+    p_value = fisher.test(table(Cluster, Usage))$p.value
+  ) %>%
+  mutate(p_value = ifelse(p_value< 0.001, "<0.001", round(p_value, 4)))
+
+
+
+```
+
+
+
+```{r}
+
+data_tool_extvar <- data_tool_extvar%>%
+  select(alder, bmi_3e5d68, hba1c, b_glucose, insulin_IU_l, total_cholesterol, hdl, ldl, triglycerider, asat, alat, Cluster)
+
+data_tool_extvar <- data_tool_extvar %>%
+  rename(
+    age = alder,
+    BMI = bmi_3e5d68,
+    HbA1c = hba1c,
+    `Blood Glucose` = b_glucose,
+    `Fasting Insulin` = insulin_IU_l,
+    `Total Cholesterol` = total_cholesterol,
+    HDL = hdl,
+    LDL = ldl,
+    Triglycerides = triglycerider,
+    ALT = alat,
+    AST = asat
+  )
+
+
+
+# 2. Beregn Kruskal-Wallis og Dunn p-værdier for hver variabel
+p_values_kruskal_test <- data_tool_extvar %>%
+  pivot_longer(
+    cols = where(is.numeric),  # Test kun numeriske kolonner
+    names_to = "Variable",
+    values_to = "Value"
+  ) %>%
+  group_by(Variable) %>%
+  kruskal_test(Value ~ Cluster) %>%  # Kruskal-Wallis test
+  select(Variable, p) %>%
+  mutate(p = ifelse(p < 0.001, "<0.001", round(p, 4))) %>% # Formatter p-værdier
+rename(`P-value` = p) 
+
+dunn_results <- data_tool_extvar %>%
+  pivot_longer(cols = where(is.numeric), names_to = "Variable", values_to = "Value") %>%
+  group_by(Variable) %>%
+  dunn_test(Value ~ Cluster, p.adjust.method = "BH")
+
+p_values_dunn <- dunn_results %>%
+  filter((group1 == "Cardiometabolic SLD" & group2 == "Control") | 
+         (group1 =="Control" &  group2 == "Liver specific SLD") | 
+         (group1 == "Cardiometabolic SLD" & group2 == "Liver specific SLD")) %>%
+  pivot_wider(names_from = c(group1, group2), values_from = p.adj, names_prefix = "p_adj_") %>%
+  mutate(across(starts_with("p_adj_"), ~ ifelse(.x < 0.001, "<0.001", round(.x, 4))))  # Formatter p-værdier
+
+p_values_dunn <- p_values_dunn[,c(1,8:10)]%>%
+  pivot_longer(cols = starts_with("p_adj_"), names_to = "Comparison", values_to = "p_value") %>%
+  drop_na(p_value) %>%  # Fjern rækker hvor p-værdien er NA
+  pivot_wider(names_from = "Comparison", values_from = "p_value")
+
+
+colnames(p_values_dunn)<-c("Variable", "CM vs ctrl", "CM vs LS","LS vs ctrl")
+
+
+```
+
+
+
+```{r}
+
+# calculating median and IQR
+cluster_stats_formatted <- data_tool_extvar %>%
+  group_by(Cluster) %>%
+  summarize(across(
+    where(is.numeric),
+    list(median = ~ median(.x, na.rm = TRUE), 
+         IQR = ~ IQR(.x, na.rm = TRUE)),
+    .names = "{col}_{fn}"
+  )) %>%
+  mutate(across(
+    ends_with("_median"),
+    ~ paste0(round(.x, 2), " (", round(get(sub("_median", "_IQR", cur_column())), 2), ")"),
+    .names = "{.col}_formatted"
+  )) %>%
+  select(Cluster, ends_with("_formatted")) %>%
+  rename_with(~ gsub("_median_formatted", "", .), ends_with("_formatted"))
+
+
+
+# 4. Omform til langt format
+cluster_stats_long <- cluster_stats_formatted %>%
+  pivot_longer(cols = -Cluster, names_to = "Variable", values_to = "Value") %>%
+  pivot_wider(names_from = Cluster, values_from = Value) 
+
+# 5. Tilføj p-værdier
+cluster_stats_long <- left_join(cluster_stats_long, p_values_kruskal_test, by = "Variable")
+
+cluster_stats_long <- left_join(cluster_stats_long, p_values_dunn, by = "Variable")
+
+cluster_stats_long
+
+
+```
+
+
+```{r}
+percentages<-as.data.frame(t(percentages))
+
+# Assign proper column names
+colnames(percentages)[1:3] <- c("Cardiometabolic SLD", "Control", "Liver specific SLD")
+
+# Remove the first row which is just the old column names repeated
+percentages <- percentages[-1, ]
+
+# Now assign human-readable labels
+percentages$Variable <- c(
+  "Antihypertensive drugs (%)",
+  "Antidiabetic drugs (%)",
+  "Cholesterol-lowering medication (%)",
+  "Steatosis grade ≥1 (%)",
+  "Ballooning grade ≥1 (%)",
+  "Lobular inflammation grade ≥1 (%)",
+  "Fibrosis ≥2 (%)",
+  "Fibrosis ≥3 (%)",
+  "MASH (%)"
+)
+
+percentages$Feature<-rownames(percentages)
+
+pairwise_results_percentages
+
+pairwise_results_percentages<-pairwise_results_percentages %>%
+  pivot_wider(
+    names_from = Cluster_Comparison,  # This will create columns based on the Cluster_Comparison
+    values_from = c(P_value, Adjusted_P_value),  # Create columns for P_value and Adjusted_P_value
+  )# %>%
+ # arrange(Medication)
+
+
+
+percentages_stats <- percentages %>%
+  left_join(test_results_percentages, by = c("Feature")) %>%
+  left_join(pairwise_results_percentages[, c("Feature",
+                                             "Adjusted_P_value_Control vs Cardiometabolic SLD",
+                                             "Adjusted_P_value_Control vs Liver specific SLD",
+                                             "Adjusted_P_value_Cardiometabolic SLD vs Liver specific SLD")],
+            by = "Feature")
+
+
+```
+
+
+
+```{r}
+
+
+percentages_stats <- percentages_stats %>%
+  rename(
+    `P-value` = p_value,
+    `CM vs ctrl` = `Adjusted_P_value_Control vs Cardiometabolic SLD`,
+    `LS vs ctrl` = `Adjusted_P_value_Control vs Liver specific SLD`,
+    `CM vs LS` = `Adjusted_P_value_Cardiometabolic SLD vs Liver specific SLD`
+  ) %>%
+  select(Variable, `Cardiometabolic SLD`, Control, `Liver specific SLD`,
+         `P-value`, `CM vs ctrl`, `CM vs LS`, `LS vs ctrl`)
+
+cluster_stats_long <- bind_rows(cluster_stats_long, percentages_stats)
+
+
+cluster_stats_long<-cluster_stats_long %>% select("Variable",`Cardiometabolic SLD`,`Liver specific SLD`,Control ,`P-value`, `CM vs LS`,`CM vs ctrl`,`LS vs ctrl`)
+colnames(cluster_stats_long)<-c("Variable","CM n=13","LS n=41","Ctrl n=169","P-value","CM vs LS","CM vs ctrl","LS vs ctrl")
+
+cluster_stats_long
+
+library(kableExtra)
+
+my_table<-kable(cluster_stats_long, format = "html", caption = "") %>%
+  add_header_above(c(" " = 4, "Global test" = 1, "Post-Hoc test\nAdjusted P-value" = 3)) %>%
+  group_rows("Glucose profile", 3, 5) %>%
+  group_rows("Liver profile", 6, 9) %>%
+  group_rows("Liver function tests", 10, 11) %>%
+  group_rows("Medications", 12, 14) %>%
+  group_rows("Liver histology", 15, 20) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover"))
+
+my_table
+
+```
+
+```{r,fig.height=5 ,fig.width=5}
+
+data_tool_extvar
+
+all_dataClust_tool$Cluster
+all_dataClust_tool$saf_diagnose
+
+library(ggplot2)
+library(dplyr)
+
+# Fjern NA først
+plot_df <- all_dataClust_tool %>%
+  filter(!is.na(saf_diagnose), !is.na(Cluster)) %>%
+  mutate(saf_diagnose = factor(saf_diagnose, levels = c(1, 2, 3))) %>%
+  mutate(Cluster = factor(Cluster, levels = c("Control", "Liver specific SLD", "Cardiometabolic SLD")))
+
+
+#pdf("/work/without_ambientRNAremoval/figures/6B_Barplot_saf_endotypedistribution.pdf", width = 5, height = 5)
+
+# Barplot: andel af hver diagnose i hver klynge
+ggplot(plot_df, aes(x = Cluster, fill = saf_diagnose)) +
+  geom_bar(position = "fill") +  # Use 'stack' if you want counts instead
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "",
+    x = "",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+    scale_fill_manual(
+    name = "SAF diagnose",
+    values = c("1" = "#00AFBB", "2" = "#E7B800", "3" = "#FC4E07")
+  )
+
+#dev.off()
+
+```
+
+
+
+#Radarplot tool clusters
+```{r}
+
+
+dataRadarN = sqldf(paste0('select ',"Cluster",', median(ALT) as ALT, median(hba1c) as HbA1c, median(triglycerides) as triglycerides, median(BMI) as BMI, median(Age) as age, median(LDL) as LDL from ',"atlas_metadata_clusters",' group by ', "Cluster"))
+
+clinVar_clust_new<-colnames(atlas_metadata_clusters)[2:7]
+
+
+color <- c( "red",  "grey60", "cyan")
+color<-color[1:3]
+ tempMinMax = apply(atlas_metadata_clusters[,clinVar_clust_new], 2, 
+                     function(r) quantile(r, probs = seq(0,1,0.05), na.rm = TRUE))
+
+ tempMinMax<-tempMinMax[,c(4,3,5,2,1,6)]
+
+  dataRadarN[nrow(dataRadarN) + 1, "Cluster"] = "Min"
+  dataRadarN[nrow(dataRadarN) + 1, "Cluster"] = "Max"
+  dataRadarN[nrow(dataRadarN) - 1, 2:ncol(dataRadarN)] = tempMinMax[2,]
+  dataRadarN[nrow(dataRadarN), 2:ncol(dataRadarN)] = tempMinMax[nrow(tempMinMax)-1,]
+  
+  
+#pdf("/work/without_ambientRNAremoval/figures/6A_radarplot_endotypes.pdf", width = 5, height = 5)
+
+    graph = radarchart(dataRadarN[,-1],
+                     
+                     # Values displayed on the axes
+                     axistype = 0,
+                     palcex = 0.7,
+                     
+                     # Polygon options
+                     pcol = c(color, scales::alpha("grey60", 0), "grey60"),
+                     pfcol = c(scales::alpha(color, 0.4), scales::alpha(c("grey60", "grey60"), 0)),
+                     plty = 1,
+                     plwd = 2,
+                     
+                     # Customize the grid
+                     cglty = 1,
+                     cglwd = 0.8,
+                     cglcol = "grey40",
+                     
+                     # Variable labels
+                     vlcex = 1,
+                     
+                     # Axis options
+                     maxmin = FALSE,
+                     axislabcol = "grey20",
+                     seg = 3,
+                     
+                     # Point options
+                     pty = 20)
+    
+#dev.off()
+
+
+```
+```{r}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+
+# Define data
+df <- data.frame(
+  Category = c("Cardiometabolic", "Liver specific", "Control"),
+  Count = c(13, 41, 169),
+  Color = c("red", "cyan", "grey") # Define colors
+)
+
+# Compute percentages
+df <- df %>%
+  mutate(Percent = Count / sum(Count) * 100,
+         Label = paste0(round(Percent, 1), "%"))  # Format labels
+df$Category<-factor(df$Category, levels = c("Cardiometabolic", "Liver specific", "Control"))
+
+
+#pdf("/work/without_ambientRNAremoval/figures/S6A_piechart_endotypedistribution.pdf", width = 6, height = 6)
+
+
+# Create pie chart
+ggplot(df, aes(x = "", y = Count, fill = Category)) +
+  geom_bar(stat = "identity", width = 1, color = "white") + # Create a bar (transformed to pie)
+  coord_polar(theta = "y") +  # Convert to pie chart
+  geom_text(aes(label = Label), position = position_stack(vjust = 0.5), size = 5) + # Add percentages
+  scale_fill_manual(values = df$Color, labels = paste0(df$Category, " (n=", df$Count, ")")) + # Custom colors and legend
+  theme_void() +  # Remove background and axes
+  theme(legend.title = element_blank()) # Remove legend title
+
+
+#dev.off()
+```
+
+

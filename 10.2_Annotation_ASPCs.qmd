@@ -1,0 +1,116 @@
+---
+title: "Annotation of cleaned subsetted object"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(ggplot2)
+ASPCs_common<-qread("/work/without_ambientRNAremoval/data/ASPC_common_cleaner.qs")
+
+```
+
+
+
+```{r}
+
+
+snn_dim <- DimPlot(ASPCs_common,
+                   reduction = 'umap.snn',
+                   label.size = 3,
+                   label = TRUE)
+
+snn_harmony <- DimPlot(ASPCs_common,
+                       reduction = 'umap.snn',
+                       group.by = "Pool",
+                       label.size = 3)
+snn_saf <- DimPlot(ASPCs_common,
+                       reduction = 'umap.snn',
+                       group.by = "saf",
+                       label.size = 3)
+snn_donor <- DimPlot(ASPCs_common,
+                       reduction = 'umap.snn',
+                       group.by = "Donor",
+                       label.size = 3, split.by = "saf")
+snn_splitsaf<-DimPlot(ASPCs_common, reduction = 'umap.snn',
+                       label.size = 3, split.by = "saf")
+snn_dim 
+snn_harmony
+snn_saf
+snn_donor
+snn_splitsaf
+
+```
+
+
+
+
+```{r}
+FAP.markers <- FindAllMarkers(ASPCs_common, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+FAP.markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 2, order_by = avg_log2FC)
+
+FAP.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+
+
+```
+
+```{r}
+new_names <- c("PPARG+","CXCL14+","EPHA3+","DPP4+","PLAU+")
+names(new_names) <- levels(ASPCs_common)
+
+
+ASPCs_common <- RenameIdents(object =ASPCs_common, new_names)
+snn_ann<-DimPlot(ASPCs_common,reduction = 'umap.snn', label = TRUE) + NoLegend()
+snn_ann
+
+```
+
+
+```{r}
+ASPCs_common@meta.data$seurat_clusters
+
+ASPCs_common$Label <- 1
+ASPCs_common@meta.data[ ASPCs_common@meta.data$seurat_clusters == "0","Label"] <- 1 
+ASPCs_common@meta.data[ ASPCs_common@meta.data$seurat_clusters == "1","Label"] <- 2
+ASPCs_common@meta.data[ ASPCs_common@meta.data$seurat_clusters == "2","Label"] <- 3
+ASPCs_common@meta.data[ ASPCs_common@meta.data$seurat_clusters == "3","Label"] <- 4
+ASPCs_common@meta.data[ ASPCs_common@meta.data$seurat_clusters == "4","Label"] <- 5
+
+ASPCs_common@meta.data$Label <- factor(x = ASPCs_common$Label, levels = c("1", "2", "3", "4","5"))
+ASPCs_common <- SetIdent(ASPCs_common, value = ASPCs_common$Label) #Sets the identity class value for cells
+
+
+## Fix cluster labels
+ASPCs_common$Annotation <- "NA"
+ASPCs_common@meta.data[ ASPCs_common@meta.data$Label %in% 1,"Annotation"] <- "PPARG+" 
+ASPCs_common@meta.data[ ASPCs_common@meta.data$Label %in% 2,"Annotation"] <- "CXCL14+"
+ASPCs_common@meta.data[ ASPCs_common@meta.data$Label %in% 3,"Annotation"] <- "EPHA3+"
+ASPCs_common@meta.data[ ASPCs_common@meta.data$Label %in% 4,"Annotation"] <- "DPP4+"
+ASPCs_common@meta.data[ ASPCs_common@meta.data$Label %in% 5,"Annotation"] <- "PLAU+"
+
+
+ASPCs_common@meta.data$Label <- factor(x = ASPCs_common$Label, levels = c("PPARG+","CXCL14+","EPHA3+","DPP4+","PLAU+"))
+
+ASPCs_common <- SetIdent(ASPCs_common, value = ASPCs_common$Annotation) #Sets the identity class value for cells
+
+
+#qsave(ASPCs_common,"/work/without_ambientRNAremoval/data/ASPC_common_Annotated.qs")
+
+```
+

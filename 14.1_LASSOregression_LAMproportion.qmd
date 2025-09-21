@@ -1,0 +1,214 @@
+---
+title: "Using lasso to infer LAM proportions in bulk RNAseq"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: true
+  warning: false
+---
+
+```{r}
+library(readr)
+library(qs)
+library(dplyr)
+library(ggplot2)
+library(Seurat)
+library(tidyr)
+library(glmnet)
+library(caret)
+library(tidyverse)
+library(ggpubr)
+library(readxl)
+
+original_female_ids <- c(
+  1, 2, 3, 6, 7, 8, 9, 10, 12, 14, 15, 17, 19, 20, 21, 22, 25, 26, 31, 32, 33, 34, 40, 41, 42, 43, 46, 47, 48, 49, 52, 55, 57, 59, 61, 64, 68, 70, 72, 74, 75, 78, 81, 82, 87, 93, 98, 101, 102, 119, 128, 130, 133, 135, 139, 141, 162, 164, 171, 177, 181, 185, 191, 198, 199, 201, 207)
+
+atlas_meta <- read_delim("/work/without_ambientRNAremoval/data-raw/ATLAS_Visit_1_Data_11_12_2024.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+atlas_meta<-atlas_meta[atlas_meta$recordid %in% original_female_ids,]
+
+
+MyeloidMarkers <- read_excel("/work/without_ambientRNAremoval/data/DElists/MyeloidMarkers.xlsx")
+
+LAM_genes<-MyeloidMarkers[MyeloidMarkers$cluster=="LAM" & MyeloidMarkers$p_val_adj<0.000000001 & MyeloidMarkers$avg_log2FC>0.6 & MyeloidMarkers$pct.2<0.25&MyeloidMarkers$pct.1>0.05,]$gene #0.0037
+
+```
+
+
+
+```{r}
+SeqID <- read_delim("/work/Liver_WAT_crosstalk_snRNA_snMultiomeRNA/To_Johanne/SeqID.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+vsd_corrected <- read_csv("/work/without_ambientRNAremoval/data-raw/vsd_corrected.csv")
+
+vsd_corrected <- as.data.frame(vsd_corrected)  # Convert tibble to data.frame
+rownames(vsd_corrected) <- vsd_corrected$...1  # Set row names as desired
+vsd_corrected$...1 <- NULL  # Optionally remove the column used for row names
+
+
+atlas_meta$SeqID<-SeqID[match(atlas_meta$recordid,SeqID$recordid ),]$SeqID
+
+bulk_expr_scaled <- scale(vsd_corrected)
+
+# Convert to matrix format for glmnet
+X <- as.matrix(bulk_expr_scaled)
+
+
+X<-X[rownames(X)%in%LAM_genes,]
+```
+
+```{r}
+
+LAM_proportions<-qread("/work/without_ambientRNAremoval/data/LAM_proportions.qs")
+
+X <- t(X)
+X<-X[rownames(X) %in% LAM_proportions$SeqID,]
+
+
+y<-LAM_proportions[match(rownames(X),LAM_proportions$SeqID),]$LAM
+```
+
+
+
+```{r}
+
+set.seed(42)
+
+n <- nrow(X)  # Number of samples
+predictions <- rep(NA, n)
+
+# Leave-One-Out Cross-Validation (LOOCV)
+for (i in 1:n) {
+  # Leave out one sample
+  X_train <- X[-i, ]
+  y_train <- y[-i]
+  X_test <- X[i, , drop=FALSE]  # Single test sample
+  
+  # Train LASSO model on remaining samples
+  lasso_cv <- cv.glmnet(X_train, y_train, alpha = 1, nfolds = 5)
+  
+  # Predict on the left-out sample
+  predictions[i] <- predict(lasso_cv, newx = X_test, s = "lambda.min")
+}
+
+# Evaluate performance
+r <- cor(y, predictions)
+mae <- mean(abs(y - predictions))
+print(paste("LOOCV R:", round(r, 3)))
+print(paste("LOOCV MAE:", round(mae, 3)))
+
+# Now, train a final model on all data for visualization and gene selection
+lasso_cv_final <- cv.glmnet(X, y, alpha = 1, nfolds = 5)
+best_lambda <- lasso_cv_final$lambda.min
+lasso_model <- glmnet(X, y, alpha = 1, lambda = best_lambda)
+
+# Extract selected genes (ensure bulk_expr_scaled is available and its rownames correspond to gene names)
+selected_genes <- colnames(X)[which(coef(lasso_model)[-1] != 0)]
+print(paste("Selected", length(selected_genes), "genes"))
+
+# Predict on all samples using the final model
+y_pred <- predict(lasso_model, newx = X, s = best_lambda)
+
+pdf("/work/without_ambientRNAremoval/figures/S3E_Lasso_prediction_performance.pdf", width = 7, height = 6)
+
+# Create a scatter plot of actual vs. predicted values
+plot(y, y_pred, main = "LASSO Prediction Performance",
+     xlab = "Actual Proportion", ylab = "Predicted Proportion",
+     col = "blue", pch = 16)
+
+# Add a 45-degree perfect prediction line
+abline(0, 1, col = "red", lwd = 2)
+dev.off()
+
+pdf("/work/without_ambientRNAremoval/figures/S3E_Lasso_prediction_performance_stats.pdf", width = 7, height = 6)
+plot.new()
+text(0.5, 0.5,"LAMs")
+text(0.5,1,paste("LOOCV R:", round(r, 3)))
+text(0.5,0.9,paste("LOOCV MAE:", round(mae, 3)))
+
+dev.off()
+```
+
+```{r}
+
+X_full<-bulk_expr_scaled[rownames(bulk_expr_scaled)%in%LAM_genes,]
+X_full<-as.matrix(X_full)
+X_full <- t(X_full)
+
+
+
+y_pred_full <-  predict(lasso_model, newx = X_full, s = best_lambda)
+
+```
+
+
+
+
+
+```{r, fig.width=10, fig.height=6}
+library(readr)
+
+SeqID <- read_delim("/work/Liver_WAT_crosstalk_snRNA_snMultiomeRNA/To_Johanne/SeqID.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+atlas_meta$SeqID<-SeqID[match(atlas_meta$recordid,SeqID$recordid ),]$SeqID
+
+
+y_pred_full_plotting<-as.data.frame(y_pred_full)
+
+all_data_LAM_LASSO<-atlas_meta[atlas_meta$SeqID %in% rownames(y_pred_full),]
+
+y_pred_full_plotting$saf<-all_data_LAM_LASSO[match(rownames(y_pred_full_plotting),all_data_LAM_LASSO$SeqID),]$saf_diagnose
+
+y_pred_full_plotting<- y_pred_full_plotting%>%
+    .[!is.na(.$saf), ]
+
+y_pred_full_plotting$saf<- factor(y_pred_full_plotting$saf, levels=c("1","2","3"))
+```
+
+
+```{r, fig.width=4, fig.height=6}
+
+my_comparisons <- list(
+  c("1", "2"),
+  c("2", "3"),
+  c("1","3"))
+
+#pdf("/work/without_ambientRNAremoval/figures/3H_original_females_saf_lasso_LAM.pdf", width = 4, height = 6)
+ggplot(y_pred_full_plotting, aes(x = as.factor(saf), y = s1,fill = saf)) + 
+  geom_boxplot(outlier.shape = NA) +  # Fjern de automatiske outliers fra boxplot
+  geom_jitter(aes(color = as.factor(clust)),color = "grey", width = 0.2, size = 1.5, alpha = 0.7) +  # Tilføj de individuelle punkter
+  labs(x = "", y = "LAM LASSO model", title = "")+
+    theme_classic()+
+theme(legend.position = "none",axis.text = element_text(size = 12, face = "bold"),axis.text.x = element_text(angle = 40, hjust = 1))+ scale_fill_manual(values=c("#00AFBB", "#E7B800","#FC4E07"))
+
+
+
+#dev.off()
+
+
+# Run the tests
+wilcox_res <- pairwise.wilcox.test(y_pred_full_plotting$s1, 
+                                    y_pred_full_plotting$saf, 
+                                    p.adjust.method = "BH")
+
+kruskal_res <- kruskal.test(y_pred_full_plotting$s1 ~ y_pred_full_plotting$saf)
+
+# Capture the printed output
+output_lines <- c(
+  "== Pairwise Wilcoxon Test ==",
+  capture.output(wilcox_res),
+  "",
+  "== Kruskal-Wallis Test ==",
+  capture.output(kruskal_res)
+)
+
+# Save to a .txt file
+writeLines(output_lines, "/work/without_ambientRNAremoval/figures/stats_LAM_saf.txt")
+```
+
+

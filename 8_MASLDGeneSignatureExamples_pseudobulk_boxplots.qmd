@@ -1,0 +1,270 @@
+---
+title: "Example MALSD DEGs, pseudobulk boxplot in Myeloid cells, ASPCs and adipocytes"
+author: "Johanne D. Madsen"
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: true
+  warning: false
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(ggplot2)
+library(magrittr)
+library(readxl)
+library(gridExtra)
+library(pheatmap)
+require(openxlsx)
+library(tidyverse)
+set.seed(10)
+
+seurat_common <- qread("/work/without_ambientRNAremoval//data/seurat_object_annotated.qs")
+
+```
+
+
+
+```{r, results="hide"}
+seurat_bulk <- AverageExpression(seurat_common, return.seurat = TRUE, group.by = c('Donor','Annotation',"saf"))
+ 
+seurat_bulk <- NormalizeData(seurat_bulk)%>% FindVariableFeatures() %>% ScaleData()%>% RunPCA(npcs = 10)
+ 
+seurat_bulk$celltype <- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 2)
+seurat_bulk$Donor<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 1)
+seurat_bulk$saf<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 3)
+ 
+```
+
+```{r,fig.width=7, fig.height=5}
+
+Selected_genes_Adipocytes<- c(  "CECR2", "AZGP1", "C6", "PCK2", "GLUL", "PNPLA3", "SLC2A4",
+  "COBL", "NALCN", "EGFL6", "COL4A4", "COL5A3", "COL6A1",
+  "KCNQ3", "THBS1", "YAP1", "ITGAV", "HMOX1", "CTSL"
+)
+
+
+Selected_genes_Myeloid <- c(
+  "LYVE1", "ALOX5AP", "HPGDS", "P2RY14", "PTAFR", "MMP9",
+  "TREM2", "IL1RN", "ALDH1A2", "SOAT1", "LIPA", "GPC4",
+  "NIBAN2", "SIPA1L1", "LFHPL2", "CTSL", "CD44"
+)
+
+
+Selected_genes_ASPCs <- c("FOSL2","BCL3","RELB",  "EBF2", "PLD5", "ADRA1B", "ESR1", "AR", "FGFR2",
+  "SLC39A14", "TEDC1", "RFX2", "CD44", "ICAM1", "NFATC2", "PLAU"
+)
+
+Selected_genes<-c(Selected_genes_Adipocytes,Selected_genes_Myeloid,Selected_genes_ASPCs)
+
+selected_cells_bulk<-seurat_bulk[,seurat_bulk$celltype %in% c("Adipocytes" ,"ASPCs","Myeloid-cells")]
+
+
+ 
+selected_cells_bulk_DEG<-selected_cells_bulk[rownames(selected_cells_bulk) %in% Selected_genes,]
+
+
+ordered_donors <- c("Donor-49",  "Donor-130",  "Donor-43",  "Donor-74",  "Donor-47",  "Donor-78",  "Donor-52",  "Donor-72",  "Donor-26",  "Donor-64",  "Donor-61",  "Donor-40",  "Donor-141",  "Donor-207",  "Donor-9-",  "Donor-82",  "Donor-6-",  "Donor-102",  "Donor-12",  "Donor-199",  "Donor-10",  "Donor-128",  "Donor-135",  "Donor-14")
+
+
+positions <- lapply(ordered_donors, function(x) which(selected_cells_bulk_DEG$Donor == x))
+
+
+positions_Adipocytes <- lapply(positions, function(x) x[1])
+positions_ASPCs <- lapply(positions, function(x) x[2])
+positions_Myeloid_cells <- lapply(positions, function(x) x[3])
+# Print the results
+
+ordered_positions<-c(unlist(positions_Adipocytes),unlist(positions_ASPCs),unlist(positions_Myeloid_cells))
+
+######
+
+
+
+selected_cells_bulk_DEG_counts<-selected_cells_bulk_DEG@assays$SCT$counts[,ordered_positions]
+
+selected_cells_bulk_DEG_counts_scaled<-apply(selected_cells_bulk_DEG_counts, 1, function(x){
+   scale(x)
+   })
+
+
+rownames(selected_cells_bulk_DEG_counts_scaled)<-colnames(selected_cells_bulk_DEG_counts)
+
+selected_cells_bulk_DEG_counts_scaled<-t(selected_cells_bulk_DEG_counts_scaled)
+
+```
+
+
+```{r,fig.width=7, fig.height=5}
+
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(grid)
+
+# Function: returns a list with plot and stats text
+plot_gene_expression_with_stats <- function(gene_name, data_matrix, p.adjust.method = "BH") {
+  if (!gene_name %in% rownames(data_matrix)) stop("Gene not found.")
+
+  gene_expr <- data_matrix[gene_name, ]
+  df <- data.frame(sample = names(gene_expr), expression = as.numeric(gene_expr))
+  df <- df %>%
+    separate(sample, into = c("Donor", "CellType", "SAF"), sep = "_", extra = "merge") %>%
+    mutate(SAF = factor(SAF, levels = c("S1", "S2", "S3")))
+
+  p <- ggplot(df, aes(x = SAF, y = expression, fill = CellType)) +
+    geom_boxplot(outlier.shape = NA) +
+  geom_jitter(color = "grey", width = 0.2, size = 1.5, alpha = 0.7)+
+    facet_wrap(~CellType) +
+    theme_classic() +
+    labs(title = paste(gene_name, "Expression by CellType and SAF"), y = "Scaled Expression", x = "SAF Score")
+
+  stats_text <- c()
+  for (ct in unique(df$CellType)) {
+    d_sub <- df %>% filter(CellType == ct)
+    kw <- kruskal.test(expression ~ SAF, data = d_sub)
+    stats_text <- c(stats_text, paste0("CellType: ", ct))
+    stats_text <- c(stats_text, paste0("  Kruskal-Wallis p: ", signif(kw$p.value, 4)))
+    if (kw$p.value < 0.05) {
+      pwc <- pairwise.wilcox.test(d_sub$expression, d_sub$SAF, p.adjust.method = p.adjust.method)
+      pwc_res <- capture.output(print(pwc))
+      stats_text <- c(stats_text, pwc_res)
+    } else {
+      stats_text <- c(stats_text, "  No significant pairwise differences.")
+    }
+    stats_text <- c(stats_text, "") # blank line between cell types
+  }
+
+  # Clean tabs
+  stats_text <- gsub("\t", "    ", stats_text)
+
+  return(list(plot = p, stats = stats_text))
+}
+
+```
+
+```{r,fig.width=7, fig.height=5}
+
+
+results_list <- lapply(Selected_genes_Adipocytes, function(gene) {
+  cat("Processing:", gene, "\n")
+  plot_gene_expression_with_stats(gene, selected_cells_bulk_DEG_counts_scaled)
+})
+
+# Optionally, name the list by gene names
+names(results_list) <- Selected_genes_Adipocytes
+
+print(results_list)
+
+
+pdf("/work/without_ambientRNAremoval/figures/boxplots_Pseudobulk_candidates_Adipocytes.pdf", width = 7, height = 6)
+
+# Loop over each result and print the plot and stats
+for (gene in Selected_genes_Adipocytes) {
+  res <- results_list[[gene]]
+  
+  # Plot page
+  print(res$plot)
+  
+  # Stats page
+  grid::grid.newpage()
+  grid::grid.text(
+    paste(res$stats, collapse = "\n"),
+    x = 0.05, y = 0.95,
+    just = c("left", "top"),
+    gp = grid::gpar(fontsize = 8)
+  )
+}
+
+# Close the PDF
+dev.off()
+
+```
+
+```{r,fig.width=7, fig.height=5}
+
+results_list <- lapply(Selected_genes_Myeloid[-15], function(gene) {
+  cat("Processing:", gene, "\n")
+  plot_gene_expression_with_stats(gene, selected_cells_bulk_DEG_counts_scaled)
+})
+
+# Optionally, name the list by gene names
+names(results_list) <- Selected_genes_Myeloid[-15]
+
+print(results_list)
+
+
+pdf("/work/without_ambientRNAremoval/figures/boxplots_Pseudobulk_candidates_Myeloid.pdf", width = 7, height = 6)
+
+# Loop over each result and print the plot and stats
+for (gene in Selected_genes_Myeloid) {
+  res <- results_list[[gene]]
+  
+  # Plot page
+  print(res$plot)
+  
+  # Stats page
+  grid::grid.newpage()
+  grid::grid.text(
+    paste(res$stats, collapse = "\n"),
+    x = 0.05, y = 0.95,
+    just = c("left", "top"),
+    gp = grid::gpar(fontsize = 8)
+  )
+}
+
+# Close the PDF
+dev.off()
+
+```
+
+```{r,fig.width=7, fig.height=5}
+
+
+results_list <- lapply(Selected_genes_ASPCs, function(gene) {
+  cat("Processing:", gene, "\n")
+  plot_gene_expression_with_stats(gene, selected_cells_bulk_DEG_counts_scaled)
+})
+
+# Optionally, name the list by gene names
+names(results_list) <- Selected_genes_ASPCs
+
+print(results_list)
+
+
+pdf("/work/without_ambientRNAremoval/figures/boxplots_Pseudobulk_candidates_ASPCs.pdf", width = 7, height = 6)
+
+# Loop over each result and print the plot and stats
+for (gene in Selected_genes_ASPCs) {
+  res <- results_list[[gene]]
+  
+  # Plot page
+  print(res$plot)
+  
+  # Stats page
+  grid::grid.newpage()
+  grid::grid.text(
+    paste(res$stats, collapse = "\n"),
+    x = 0.05, y = 0.95,
+    just = c("left", "top"),
+    gp = grid::gpar(fontsize = 8)
+  )
+}
+
+# Close the PDF
+dev.off()
+
+```
+
+
+
+
+
+
+
+

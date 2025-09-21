@@ -1,0 +1,184 @@
+---
+title: "Subsetting and cleaning of ASPCs"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(ggplot2)
+seurat_common <- qread("/work/without_ambientRNAremoval/data/seurat_object_annotated.qs")
+
+#ASPCs_common<-qread("../data/ASPC_common.qs")
+
+
+#qsave(ASPCs_common,"/work/without_ambientRNAremoval/data/ASPC_common.qs")
+```
+
+```{r}
+ASPCs <-subset(seurat_common, idents = "ASPCs" )
+
+ASPCs_donor_list <- ASPCs %>%
+  SplitObject(split.by = "Donor")
+
+#ASPCs_donor_list <- ASPCs_common %>%
+#  SplitObject(split.by = "Donor")
+
+# 2. LogNormalize RNA data
+ASPCs_donor_list <- lapply(ASPCs_donor_list, function(seurat_obj){
+  output <- Seurat::NormalizeData(seurat_obj,
+                                  assay = "RNA",
+                                  verbose = TRUE)
+  return(output)
+})
+
+
+
+ASPCs_common <- purrr::reduce(ASPCs_donor_list, merge)
+DefaultAssay(ASPCs_common) <- "RNA"
+
+ASPCs_common<-Seurat::FindVariableFeatures(ASPCs_common,
+                                  assay = "RNA",
+                                  verbose = TRUE)
+
+ 
+ASPCs_common <- ScaleData(ASPCs_common, split.by="Donor")
+
+
+
+ASPCs_common <- ASPCs_common %>%
+  RunPCA(seed.use = 1000,
+         verbose = TRUE)
+```
+
+
+```{r}
+ASPCs_common <- ASPCs_common %>%
+  harmony::RunHarmony(
+    group.by.vars = "Pool",
+    assay.use = 'RNA',
+    reduction.save = 'harmony.pca.RNA',
+    project.dim = F,
+    kmeans_init_nstart=20,
+    kmeans_init_iter_max=100
+  )
+
+# UMAP
+ASPCs_common <- ASPCs_common %>%
+  Seurat::RunUMAP(
+    dims = 1:20,
+    reduction = 'harmony.pca.RNA',
+    reduction.name = 'umap.rna',
+    reduction.key = 'rnaUMAP_',
+    seed.use = 1000,
+    verbose = TRUE)
+
+```
+
+```{r}
+ASPCs_common <- ASPCs_common %>%
+  Seurat::FindNeighbors(reduction = "harmony.pca.RNA",
+                        dims = 1:20, compute.SNN = TRUE)%>% 
+  Seurat::FindNeighbors(reduction = "harmony.pca.RNA",
+                        dims = 1:20, return.neighbor = TRUE)
+#Do twice. Once with compute.SNN = TRUE, once with return.neighbor = TRUE. Can't run both
+
+
+# Run UMAP dimensional reduction based on WNN
+ASPCs_common <- ASPCs_common %>%
+  RunUMAP(
+    nn.name = "RNA.nn",
+    reduction.name = "umap.snn",
+    reduction.key = "snnUMAP_",
+    seed.use = 1000)
+
+# Cluster determination
+ASPCs_common <- ASPCs_common %>%
+  FindClusters(
+    graph.name = "RNA_snn",
+    algorithm = 3,
+    res =0.3,
+    random.seed = 1000,
+    verbose = TRUE
+  )
+
+```
+
+
+```{r}
+
+
+snn_dim <- DimPlot(ASPCs_common,
+                   reduction = 'umap.snn',
+                   label.size = 3,
+                   label = TRUE)
+
+snn_harmony <- DimPlot(ASPCs_common,
+                       reduction = 'umap.snn',
+                       group.by = "Pool",
+                       label.size = 3)
+snn_saf <- DimPlot(ASPCs_common,
+                       reduction = 'umap.snn',
+                       group.by = "saf",
+                       label.size = 3)
+snn_donor <- DimPlot(ASPCs_common,
+                       reduction = 'umap.snn',
+                       group.by = "Donor",
+                       label.size = 3, split.by = "saf")
+snn_splitsaf<-DimPlot(ASPCs_common, reduction = 'umap.snn',
+                       label.size = 3, split.by = "saf")
+snn_dim 
+snn_harmony
+snn_saf
+snn_donor
+snn_splitsaf
+
+```
+
+```{r}
+FAP.markers <- FindAllMarkers(ASPCs_common, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+FAP.markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 2, order_by = avg_log2FC)
+
+FAP.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+
+top10
+ASPCs_heatmap<-DoHeatmap(ASPCs_common, features = top10$gene) + NoLegend()
+
+ASPCs_heatmap
+```
+
+I used the publically available singe cell atlas "WATLAS" to identify clusters contaminated with forgein cell types and removed them manually.
+
+https://singlecell.broadinstitute.org/single_cell/study/SCP2289/a-single-cell-atlas-of-human-and-mouse-white-adipose-tissue 
+```{r}
+top10[top10$cluster %in% c("3","5","6","7"),]$gene
+
+
+
+snn_dim 
+```
+
+```{r}
+ASPCs_common_clean<-subset(ASPCs_common, idents = c("0","1","2","4"))
+
+qsave(ASPCs_common_clean,"/work/without_ambientRNAremoval/data/ASPC_common_clean.qs")
+```
+
+
+
+

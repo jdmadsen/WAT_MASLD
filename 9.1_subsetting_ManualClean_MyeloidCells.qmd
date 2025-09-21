@@ -1,0 +1,212 @@
+---
+title: "Subsetting and cleaning of Myeloid cells"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(ggplot2)
+options(Seurat.object.assay.version = "v3")
+seurat_common <- qread("/work/without_ambientRNAremoval/data/seurat_object_annotated.qs")
+#Myeloid_cells_common<-qread("/work/without_ambientRNAremoval/data/Myeloid_cells_common.qs")
+
+Myeloid_cells_common<-qread("/work/without_ambientRNAremoval/data/Myeloid_cells_common_clean.qs")
+#qsave(Myeloid_cells_common,"/work/without_ambientRNAremoval/data/Myeloid_cells_common.qs")
+```
+
+I did two rounds of manual cleanup. The first time i subsetted as shown below, the second time i skipped the subtetting step. 
+
+```{r}
+#Myeloid_cells <-subset(seurat_common, idents = "Myeloid_cells" )
+
+#Myeloid_cells_donor_list <- Myeloid_cells %>%
+#  SplitObject(split.by = "Donor")
+
+Myeloid_cells_donor_list <- Myeloid_cells_common %>%
+  SplitObject(split.by = "Donor")
+
+# 2. LogNormalize RNA data
+Myeloid_cells_donor_list <- lapply(Myeloid_cells_donor_list, function(seurat_obj){
+  output <- Seurat::NormalizeData(seurat_obj,
+                                  assay = "RNA",
+                                  verbose = TRUE)
+  return(output)
+})
+
+
+
+Myeloid_cells_common <- purrr::reduce(Myeloid_cells_donor_list, merge)
+DefaultAssay(Myeloid_cells_common) <- "RNA"
+
+Myeloid_cells_common<-Seurat::FindVariableFeatures(Myeloid_cells_common,
+                                  assay = "RNA",
+                                  verbose = TRUE)
+
+ 
+Myeloid_cells_common <- ScaleData(Myeloid_cells_common, split.by="Donor")
+
+
+
+Myeloid_cells_common <- Myeloid_cells_common %>%
+  RunPCA(seed.use = 1000,
+         verbose = TRUE)
+```
+
+
+```{r}
+Myeloid_cells_common <- Myeloid_cells_common %>%
+  harmony::RunHarmony(
+    group.by.vars = "Pool",
+    assay.use = 'RNA',
+    reduction.save = 'harmony.pca.RNA',
+    project.dim = F,
+    kmeans_init_nstart=20,
+    kmeans_init_iter_max=100
+  )
+
+# UMAP
+Myeloid_cells_common <- Myeloid_cells_common %>%
+  Seurat::RunUMAP(
+    dims = 1:20,
+    reduction = 'harmony.pca.RNA',
+    reduction.name = 'umap.rna',
+    reduction.key = 'rnaUMAP_',
+    seed.use = 1000,
+    verbose = TRUE)
+
+```
+
+```{r}
+Myeloid_cells_common <- Myeloid_cells_common %>%
+  Seurat::FindNeighbors(reduction = "harmony.pca.RNA",
+                        dims = 1:20, compute.SNN = TRUE)%>% 
+  Seurat::FindNeighbors(reduction = "harmony.pca.RNA",
+                        dims = 1:20, return.neighbor = TRUE)
+#Do twice. Once with compute.SNN = TRUE, once with return.neighbor = TRUE. Can't run both
+
+
+# Run UMAP dimensional reduction based on WNN
+Myeloid_cells_common <- Myeloid_cells_common %>%
+  RunUMAP(
+    nn.name = "RNA.nn",
+    reduction.name = "umap.snn",
+    reduction.key = "snnUMAP_",
+    seed.use = 1000)
+
+# Cluster determination
+Myeloid_cells_common <- Myeloid_cells_common %>%
+  FindClusters(
+    graph.name = "RNA_snn",
+    algorithm = 3,
+    res =0.2,
+    random.seed = 1000,
+    verbose = TRUE
+  )
+
+```
+
+
+```{r}
+
+
+snn_dim <- DimPlot(Myeloid_cells_common,
+                   reduction = 'umap.snn',
+                   label.size = 3,
+                   label = TRUE)
+
+snn_harmony <- DimPlot(Myeloid_cells_common,
+                       reduction = 'umap.snn',
+                       group.by = "Pool",
+                       label.size = 3)
+snn_saf <- DimPlot(Myeloid_cells_common,
+                       reduction = 'umap.snn',
+                       group.by = "saf",
+                       label.size = 3)
+snn_donor <- DimPlot(Myeloid_cells_common,
+                       reduction = 'umap.snn',
+                       group.by = "Donor",
+                       label.size = 3, split.by = "saf")
+snn_splitsaf<-DimPlot(Myeloid_cells_common, reduction = 'umap.snn',
+                       label.size = 3, split.by = "saf")
+snn_dim 
+snn_harmony
+snn_saf
+snn_donor
+snn_splitsaf
+
+```
+
+```{r}
+myeloid.markers <- FindAllMarkers(Myeloid_cells_common, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+myeloid.markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 2, order_by = avg_log2FC)
+
+myeloid.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+
+top10[top10$cluster==6,]$gene
+Myeloid_cells_heatmap<-DoHeatmap(Myeloid_cells_common, features = top10$gene) + NoLegend()
+
+Myeloid_cells_heatmap
+```
+
+I used the publically available singe cell atlas "WATLAS" to identify clusters contaminated with forgein cell types and removed them manually.
+
+https://singlecell.broadinstitute.org/single_cell/study/SCP2289/a-single-cell-atlas-of-human-and-mouse-white-adipose-tissue 
+
+```{r}
+
+##first clean
+#top10[top10$cluster=="0",]$gene 
+#top10[top10$cluster=="1",]$gene  
+#top10[top10$cluster=="2",]$gene 
+#top10[top10$cluster=="3",]$gene 
+#top10[top10$cluster=="4",]$gene  
+#top10[top10$cluster=="5",]$gene 
+#top10[top10$cluster=="6",]$gene 
+#top10[top10$cluster=="7",]$gene 
+#top10[top10$cluster=="8",]$gene #VEC contaminated
+#top10[top10$cluster=="9",]$gene #SMC/pericyte contaminated
+#top10[top10$cluster=="10",]$gene 
+#top10[top10$cluster=="11",]$gene #ASPCs contaminated
+#top10[top10$cluster=="12",]$gene #General trash
+#top10[top10$cluster=="13",]$gene #t-cell contaminated
+#top10[top10$cluster=="14",]$gene #HES4 monocyte contaminated
+#top10[top10$cluster=="15",]$gene #CLEC9A DC
+#top10[top10$cluster=="16",]$gene #CCR7 DC
+
+##second clean
+#top10[top10$cluster=="6",]$gene #very high in all myeloid populations. I removed it.
+
+```
+
+I separated B-cells that naturally clustered with the myeloid cells.
+
+```{r}
+#B_lymphocytes_common_clean <-subset(Myeloid_cells_common, idents = c("5","11"))
+#qsave(B_lymphocytes_common_clean,"/work/with_ambientRNAremoval/data/B_lymphocytes_common_clean.qs")
+
+
+#Myeloid_cells_common_clean<-subset(Myeloid_cells_common, idents = c("0","1","2","3","4","5","7"))
+
+#qsave(Myeloid_cells_common_clean,"/work/without_ambientRNAremoval/data/Myeloid_cells_common_clean.qs")
+
+```
+
+
+
+

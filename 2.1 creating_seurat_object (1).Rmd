@@ -1,0 +1,201 @@
+---
+title: "Annotation of snRNA samples without ambient RNA removal"
+author: "Aino R. Peltonen"
+date: "`r Sys.Date()`"
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+#| message: false
+library(magrittr)
+library(dplyr)
+library(CRMetrics)
+library(knitr)
+library(sccore)
+library(qs)
+library(scHelper)
+library(parallel)
+library(pagoda2)
+library(conos)
+library(cowplot)
+library(ggplot2)
+library(DESeq2)
+library(tidyr)
+library(DelayedMatrixStats)
+library(Seurat)
+
+#is important for it to work with cacoa later
+options(Seurat.object.assay.version = "v3")
+n.cores = 32
+```
+
+# First creating a seurat object of the cleaned data
+
+```{r chunk 1}
+load("../data/crm_environment_filtered_002.RData")
+
+seurat_list <- lapply(crm$cms.filtered, function(x) {
+    CreateSeuratObject(counts = x, project = "LWC", 
+                       min.cells = 3, min.features = 200)})
+
+#check that the class is Assay and not Assay5
+class(seurat_list$Donor_128[["RNA"]])
+
+merged_seurat <- NULL
+
+for (i in 1:length(seurat_list)) {
+  if (is.null(merged_seurat)) {
+    merged_seurat <- seurat_list[[i]]
+  } else {
+    merged_seurat <- merge(merged_seurat, seurat_list[[i]])
+  }
+}
+```
+
+```{r chunk 2}
+head(substr(rownames(merged_seurat@meta.data),0,9))
+head(substr(rownames(merged_seurat@meta.data),12,15))
+
+merged_seurat$Donor <- (ifelse(substr(rownames(merged_seurat@meta.data),9,9)=="!",substr(rownames(merged_seurat@meta.data),0,8),substr(rownames(merged_seurat@meta.data),0,9)))
+
+merged_seurat$Pool <-(ifelse(substr(rownames(merged_seurat@meta.data),12,12)=="D",substr(rownames(merged_seurat@meta.data),12,15),substr(rownames(merged_seurat@meta.data),11,14)))
+
+metadata<- read.delim("/work/Liver_WAT_crosstalk_snRNA_snMultiomeRNA/without_ambientRNAremoval_snRN_subset/data-raw/colData_All_Factor.txt")
+
+metadata$SeqID <- substr(metadata$SeqID, 1, nchar(metadata$SeqID)-11)
+
+metadata$SeqID[10:96]<-sub("D", "Donor_", metadata$SeqID[10:96])
+metadata$SeqID[1:9]<-sub("D0", "Donor_", metadata$SeqID[1:9])
+names(metadata)[names(metadata) == 'SeqID'] <- 'sample'
+
+head(merged_seurat$Donor)
+
+saf<-mapply(function(x) {
+   if(x %in% metadata[,1]) { metadata[metadata[,1]==x,] %>% pull(saf_diagnose)}
+    } , x=merged_seurat$Donor)
+
+merged_seurat$saf<-unlist(saf)
+
+merged_seurat <- subset(merged_seurat, features = rownames(merged_seurat)[grep("MT", rownames(merged_seurat), invert = TRUE)])
+merged_seurat <- subset(merged_seurat, features = rownames(merged_seurat)[grep("RPL|RPS", rownames(merged_seurat), invert = TRUE)])
+```
+
+```{r chunk 3}
+seurat_donor_list <- merged_seurat %>%
+  SplitObject(split.by = "Donor")
+
+# 2. LogNormalize RNA data
+seurat_donor_list <- lapply(seurat_donor_list, function(seurat_obj){
+  output <- Seurat::NormalizeData(seurat_obj,
+                                  assay = "RNA",
+                                  normalization.method = "LogNormalize",
+                                  scale.fator = 10000,
+                                  margin = 1,
+                                  verbose = TRUE)
+  return(output)
+})
+
+seurat_donor_list
+
+# seurat_donor_list <- lapply(seurat_donor_list , function(.x) {
+#   .x %>%
+#     ScaleData(assay = "RNA",
+#               model.use = "linear",
+#               do.scale = TRUE,
+#               do.center = FALSE,
+#               scale.max = 10,
+#               block.size = 1000,
+#               min.cells.to.block = 3000,
+#               verbose = TRUE)
+# })
+
+seurat_donor_list <- lapply(seurat_donor_list , function(.x) {
+  .x %>%
+    Seurat::SCTransform(assay = "RNA",
+                        variable.features.n = 3000,
+                        vst.flavor = "v2",
+                        verbose = TRUE,
+                        seed.use = 1000)
+})
+
+View(seurat_donor_list)
+
+#seurat_common <- Seurat:::merge.SCTAssay(seurat_donor_list)
+
+seurat_common <-  purrr::reduce(seurat_donor_list, merge)
+
+seurat_donor_list
+
+variable_features_rna <- Seurat::SelectIntegrationFeatures(seurat_donor_list,
+                                                           nfeatures = 3000)
+
+VariableFeatures(seurat_common[["SCT"]]) <- variable_features_rna
+
+seurat_common <- seurat_common%>%
+  RunPCA(assay = "SCT",
+         seed.use = 1000,
+         verbose = TRUE)
+```
+
+```{r}
+seurat_common <- seurat_common %>%
+  harmony::RunHarmony(
+    group.by.vars = "Pool",
+    assay.use = 'SCT',
+    reduction.save = 'harmony.pca.rna',
+    project.dim = F,
+    kmeans_init_nstart=20,
+    kmeans_init_iter_max=100
+  )
+
+seurat_common@meta.data$Pool
+# UMAP
+seurat_common <- seurat_common %>%
+  Seurat::RunUMAP(
+    dims = 1:20,
+    reduction = 'harmony.pca.rna',
+    reduction.name = 'umap.rna',
+    reduction.key = 'rnaUMAP_',
+    seed.use = 1000,
+    verbose = TRUE)
+```
+
+
+```{r}
+seurat_common <- seurat_common %>%
+  Seurat::FindNeighbors(reduction = "harmony.pca.rna",
+                        dims = 1:20, compute.SNN = TRUE)%>% 
+  Seurat::FindNeighbors(reduction = "harmony.pca.rna",
+                        dims = 1:20, return.neighbor = TRUE)
+#Do twice. Once with compute.SNN = TRUE, once with return.neighbor = TRUE. Can't run both
+
+
+# Run UMAP dimensional reduction based on WNN
+seurat_common <- seurat_common %>%
+  RunUMAP(
+    nn.name = "SCT.nn",
+    reduction.name = "umap.snn",
+    reduction.key = "snnUMAP_",
+    seed.use = 1000)
+
+# Cluster determination
+seurat_common <- seurat_common %>%
+  FindClusters(
+    graph.name = "SCT_snn",
+    algorithm = 3,
+    res = 0.1,
+    random.seed = 1000,
+    verbose = TRUE
+  )
+```
+
+```{r info}
+qsave(seurat_common, "../data/seurat_object.qs")
+sessionInfo()
+```
+

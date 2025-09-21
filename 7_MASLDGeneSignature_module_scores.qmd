@@ -1,0 +1,518 @@
+---
+title: "Connecting Myeloid SAF DEGs (p0.05) to increase in LAM population "
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: true
+  warning: false
+---
+
+```{r,setup, results='hide'}
+library(dplyr)
+library(Seurat)
+library(qs)
+library(ggplot2)
+library(cacoa)
+library(magrittr)
+library(readxl)
+library(tidyr)
+library(rstatix)
+library(UCell)
+library(patchwork)
+Myeloid_cells_common<-qread("/work/without_ambientRNAremoval/data/Myeloid_cells_common_Annotated.qs")
+ASPCs_common<-qread("/work/without_ambientRNAremoval/data/ASPC_common_Annotated.qs")
+Adipocytes_common<-qread("/work/without_ambientRNAremoval/data/Adipocytes_common_Annotated.qs")
+#AA_common<-qread("/work/without_ambientRNAremoval/data/AA_common_annotated_publication.qs")
+AA_common<-qread("/work/without_ambientRNAremoval/data/AA_common_annotated_publication_newName.qs")
+
+```
+
+
+
+```{r, results='hide'}
+
+Myeloid_cluster_genes <- read_excel("/work/without_ambientRNAremoval/data/Kmeans_clusters_seed30_p01_Myeloid_1v1.xlsx")
+colnames(Myeloid_cluster_genes)<-c("genes","cluster")
+Myeloid <- list()
+Myeloid$cluster1genes <- Myeloid_cluster_genes[Myeloid_cluster_genes$cluster==1,]$genes
+Myeloid$cluster2genes <- Myeloid_cluster_genes[Myeloid_cluster_genes$cluster==2,]$genes
+Myeloid$cluster3genes <- Myeloid_cluster_genes[Myeloid_cluster_genes$cluster==3,]$genes
+
+####
+
+ASPC_cluster_genes <- read_excel("/work/without_ambientRNAremoval/data/Kmeans_clusters_seed600_p01_ASPCs_2clusters_1v1.xlsx")
+colnames(ASPC_cluster_genes)<-c("genes","cluster")
+
+ASPC <- list()
+ASPC$cluster1_genes <- ASPC_cluster_genes[ASPC_cluster_genes$cluster==1,]$genes
+ASPC$cluster2_genes <- ASPC_cluster_genes[ASPC_cluster_genes$cluster==2,]$genes
+
+
+####
+
+Adipocyte_cluster_genes <- read_excel("/work/without_ambientRNAremoval/data/Kmeans_clusters_seed30_p01_Adipocytes_1v1.xlsx")
+colnames(Adipocyte_cluster_genes)<-c("genes","cluster")
+#I switch cluster 2 and 3 here so it fits with the heatmap
+Adipocyte <- list()
+Adipocyte$cluster1_genes <- Adipocyte_cluster_genes[Adipocyte_cluster_genes$cluster==1,]$genes
+Adipocyte$cluster3_genes <- Adipocyte_cluster_genes[Adipocyte_cluster_genes$cluster==2,]$genes
+Adipocyte$cluster2_genes <- Adipocyte_cluster_genes[Adipocyte_cluster_genes$cluster==3,]$genes
+
+```
+Calculating Myeloid MASLD signature module scores in pseudobulked Myeloid cells, ASPCs and Adipocytes and preparing for plotting
+```{r}
+
+seurat_common <- qread("/work/without_ambientRNAremoval/data/seurat_object_annotated.qs")
+
+
+seurat_bulk <- AverageExpression(seurat_common, return.seurat = TRUE, group.by = c('Donor',"saf","Annotation"))
+ 
+seurat_bulk <- NormalizeData(seurat_bulk)%>% FindVariableFeatures() %>% ScaleData()%>% RunPCA(npcs = 10)
+ 
+
+seurat_bulk$Donor<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 1)
+seurat_bulk$saf<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 2)
+seurat_bulk$Annotation<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 3)
+
+
+
+seurat_bulk <- AddModuleScore_UCell(seurat_bulk, features = Myeloid)
+
+signature.names <- paste0(names(Myeloid), "_UCell")
+
+
+Ucell_HM_data<-FetchData(object = seurat_bulk, vars = c(signature.names, "Annotation", "Donor","saf"))
+Ucell_HM_data$Donor_Ann<-rownames(Ucell_HM_data)
+
+Ucell_HM_data_long<-pivot_longer(Ucell_HM_data, signature.names)
+
+Ucell_HM_data_long_mean<-Ucell_HM_data_long%>%
+  group_by(Annotation, name,saf) %>%
+  summarize(mean_value = mean(value, na.rm = TRUE))
+
+Ucell_HM_data_long_mean <- Ucell_HM_data_long_mean %>%
+  mutate(name_saf = paste(name, saf, sep = "_"))
+
+
+
+Ucell_HM_data_long_mean<-Ucell_HM_data_long_mean%>%
+  filter(Annotation %in% c("ASPCs", "Adipocytes", "Myeloid-cells"))
+
+Myeloidsignatures<-Ucell_HM_data_long_mean
+
+
+```
+Calculating ASPC MASLD signature module scores in pseudobulked Myeloid cells, ASPCs and Adipocytes and preparing for plotting
+```{r, fig.width=6, fig.height=5}
+
+seurat_common <- qread("/work/without_ambientRNAremoval/data/seurat_object_annotated.qs")
+
+
+seurat_bulk <- AverageExpression(seurat_common, return.seurat = TRUE, group.by = c('Donor',"saf","Annotation"))
+ 
+seurat_bulk <- NormalizeData(seurat_bulk)%>% FindVariableFeatures() %>% ScaleData()%>% RunPCA(npcs = 10)
+ 
+
+seurat_bulk$Donor<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 1)
+seurat_bulk$saf<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 2)
+seurat_bulk$Annotation<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 3)
+
+
+
+seurat_bulk <- AddModuleScore_UCell(seurat_bulk, features = ASPC)
+
+signature.names <- paste0(names(ASPC), "_UCell")
+
+
+Ucell_HM_data<-FetchData(object = seurat_bulk, vars = c(signature.names, "Annotation", "Donor","saf"))
+Ucell_HM_data$Donor_Ann<-rownames(Ucell_HM_data)
+
+Ucell_HM_data_long<-pivot_longer(Ucell_HM_data, signature.names)
+
+Ucell_HM_data_long_mean<-Ucell_HM_data_long%>%
+  group_by(Annotation, name,saf) %>%
+  summarize(mean_value = mean(value, na.rm = TRUE))
+
+Ucell_HM_data_long_mean <- Ucell_HM_data_long_mean %>%
+  mutate(name_saf = paste(name, saf, sep = "_"))
+
+
+
+Ucell_HM_data_long_mean<-Ucell_HM_data_long_mean%>%
+  filter(Annotation %in% c("ASPCs", "Adipocytes", "Myeloid-cells"))
+
+ASPCsignatures<-Ucell_HM_data_long_mean
+
+
+
+```
+Calculating Adipocyte MASLD signature module scores in pseudobulked Myeloid cells, ASPCs and Adipocytes and preparing for plotting
+```{r}
+
+seurat_common <- qread("/work/without_ambientRNAremoval/data/seurat_object_annotated.qs")
+
+
+seurat_bulk <- AverageExpression(seurat_common, return.seurat = TRUE, group.by = c('Donor',"saf","Annotation"))
+ 
+seurat_bulk <- NormalizeData(seurat_bulk)%>% FindVariableFeatures() %>% ScaleData()%>% RunPCA(npcs = 10)
+ 
+
+seurat_bulk$Donor<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 1)
+seurat_bulk$saf<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 2)
+seurat_bulk$Annotation<- sapply(strsplit(Cells(seurat_bulk), split = '_'), '[', 3)
+
+
+
+seurat_bulk <- AddModuleScore_UCell(seurat_bulk, features = Adipocyte)
+
+signature.names <- paste0(names(Adipocyte), "_UCell")
+Ucell_HM_data<-FetchData(object = seurat_bulk, vars = c(signature.names, "Annotation", "Donor","saf"))
+Ucell_HM_data$Donor_Ann<-rownames(Ucell_HM_data)
+
+Ucell_HM_data_long<-pivot_longer(Ucell_HM_data, signature.names)
+
+Ucell_HM_data_long_mean<-Ucell_HM_data_long%>%
+  group_by(Annotation, name,saf) %>%
+  summarize(mean_value = mean(value, na.rm = TRUE))
+
+Ucell_HM_data_long_mean <- Ucell_HM_data_long_mean %>%
+  mutate(name_saf = paste(name, saf, sep = "_"))
+
+
+
+Ucell_HM_data_long_mean<-Ucell_HM_data_long_mean%>%
+  filter(Annotation %in% c("ASPCs", "Adipocytes", "Myeloid-cells"))
+
+Adipocytesignatures<-Ucell_HM_data_long_mean
+
+
+
+```
+Collecting the module scores from all the gene signatures and plotting
+```{r}
+
+
+Myeloidsignatures$signature<-rep("myeloid",length(Myeloidsignatures$Annotation))
+ASPCsignatures$signature<-rep("ASPC",length(ASPCsignatures$Annotation))
+Adipocytesignatures$signature<-rep("adipocyte",length(Adipocytesignatures$Annotation))
+
+master_df<-rbind(Myeloidsignatures,ASPCsignatures,Adipocytesignatures)
+
+
+master_df <- master_df %>%
+  mutate(signature_name = paste(signature, name, sep = "_"))
+
+
+master_df_scaled <- master_df %>%
+  group_by(signature_name) %>%
+  mutate(scaled_value = (mean_value - min(mean_value)) / (max(mean_value) - min(mean_value))) %>%
+  ungroup()
+
+
+
+master_df_scaled$Annotation<-factor(master_df_scaled$Annotation,levels = c("Myeloid-cells","ASPCs","Adipocytes") )
+
+master_df_scaled$signature_name<-factor(master_df_scaled$signature_name,levels = rev(c("myeloid_cluster3genes_UCell","myeloid_cluster1genes_UCell", "myeloid_cluster2genes_UCell","ASPC_cluster2_genes_UCell","ASPC_cluster1_genes_UCell","adipocyte_cluster3_genes_UCell","adipocyte_cluster1_genes_UCell","adipocyte_cluster2_genes_UCell") ))
+
+#pdf("/work/without_ambientRNAremoval/figures/2J_ucell_modulescore_genesignatures_global.pdf", width = 6.5, height = 4)
+
+#OBS we renamed the clusters manually in inkscape
+
+ggplot(master_df_scaled, aes(x = saf, y = signature_name)) +
+  geom_point(aes(size = mean_value, color = scaled_value)) +
+  scale_color_gradient(
+    name = "row-scaled\nscore",
+    low = "deepskyblue4", high = "red"
+  ) +
+  scale_size_continuous(name = "mean module score") +
+  facet_grid(~Annotation) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+    legend.key.size = unit(0.5, 'cm'),
+    legend.key.height = unit(0.5, 'cm'),
+    legend.key.width = unit(0.5, 'cm'),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 8),
+    panel.spacing.x = unit(0.7, "lines")
+  )
+#dev.off()
+
+
+
+```
+
+
+
+```{r}
+
+Myeloid_cells_common <- AddModuleScore_UCell(Myeloid_cells_common, features = Myeloid)
+
+my_levels <- c("ATM","LAM","classical Monocytes","non-classical Monocytes","cDC1","cDC2 (CDC1c+)", "cDC2 (CCR7+)")
+unique(Myeloid_cells_common$Annotation) %in%my_levels
+
+Myeloid_cells_common$Annotation<- factor(Myeloid_cells_common$Annotation, levels=rev(my_levels))
+
+```
+Myeloid MASLD signature modules in heatmaps by Myeloid subclusters 
+```{r,fig.height=4 ,fig.width=6}
+signature.names <- paste0(names(Myeloid), "_UCell")
+
+VlnPlot(Myeloid_cells_common, features = signature.names, group.by = "Annotation", pt.size=0,cols = c("#F8766D","#00A9FF","#0BB702","#00C19A","#FF61CC","#8494FF","#CD9600"))
+
+Myeloid_cells_common@meta.data$cluster1genesUCell<-Myeloid_cells_common@meta.data$cluster1genes_UCell
+Myeloid_cells_common@meta.data$cluster2genesUCell<-Myeloid_cells_common@meta.data$cluster2genes_UCell
+Myeloid_cells_common@meta.data$cluster3genesUCell<-Myeloid_cells_common@meta.data$cluster3genes_UCell
+
+
+Ucell_HM_data<-FetchData(object = Myeloid_cells_common, vars = c(signature.names, "Annotation","Donor","saf"))
+
+Ucell_HM_data_long<-pivot_longer(Ucell_HM_data, signature.names)
+
+
+
+Ucell_HM_data_long_mean<-Ucell_HM_data_long%>%
+  group_by(Annotation, name, saf) %>%
+  summarize(mean_value = mean(value, na.rm = TRUE))
+
+Ucell_HM_data_long_mean$name<-factor(Ucell_HM_data_long_mean$name, levels=c("cluster3genes_UCell","cluster1genes_UCell","cluster2genes_UCell"))
+
+
+#pdf("/work/without_ambientRNAremoval/figures/3F_ucell_modulescore_genesignatures.pdf", width = 4, height = 3)
+
+
+ggplot(Ucell_HM_data_long_mean, aes(x=Annotation,y=name,fill=mean_value))+ geom_tile()+coord_flip()+
+    scale_fill_continuous(name="mean \nmodule \nscore",low = "deepskyblue4", high = "red")+theme_classic()+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),legend.key.size = unit(0.1, 'cm'), #change legend key size
+        legend.key.height = unit(0.3, 'cm'), #change legend key height
+        legend.key.width = unit(0.3, 'cm'), #change legend key width
+        legend.title = element_text(size=10), #change legend title font size
+        legend.text = element_text(size=8))+ #change legend text font size)
+  scale_y_discrete(labels = c("S1 signature", "S2/3 signature", "S3 signature"))
+
+#dev.off()
+
+
+```
+
+
+
+statistics not shown in manuscript because it was too complex to add in a nice way
+```{r,fig.height=4 ,fig.width=6}
+#########
+
+Ucell_HM_data_long_mean_donor<-Ucell_HM_data_long%>%
+  group_by(Annotation, Donor, name) %>%
+  summarize(mean_value = mean(value, na.rm = TRUE))
+
+#cluster 1
+kruskal.test(mean_value ~ Annotation, data = Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster1genes_UCell",])
+
+
+pairwise.wilcox.test(Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster1genes_UCell",]$mean_value, Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster1genes_UCell",]$Annotation,
+                 p.adjust.method = "BH")
+
+
+#cluster 2
+kruskal.test(mean_value ~ Annotation, data = Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster2genes_UCell",])
+
+
+pairwise.wilcox.test(Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster2genes_UCell",]$mean_value, Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster2genes_UCell",]$Annotation,
+                 p.adjust.method = "BH")
+
+
+
+#cluster 3
+kruskal.test(mean_value ~ Annotation, data = Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster3genes_UCell",])
+
+
+pairwise.wilcox.test(Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster3genes_UCell",]$mean_value, Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster3genes_UCell",]$Annotation,
+                 p.adjust.method = "BH")
+
+
+```
+
+
+Myeloid MASLD signature modules in featureplots in subsetted Myeloid object
+```{r,fig.height=5 ,fig.width=10}
+
+blu_org<-colorRampPalette(c("deepskyblue4","darkorange"),bias=1)
+org_red<-colorRampPalette(c("darkorange","#B22222"),bias=1)
+
+col<-c(blu_org(30),org_red(30))
+
+#pdf("/work/without_ambientRNAremoval/figures/S3H_Ucell_myeloid_UMAPs.pdf", width = 11, height = 4)
+
+
+wrap_plots(
+FeaturePlot(Myeloid_cells_common, reduction = "umap.snn",
+            features = signature.names[3], label = F, repel = TRUE)+ggtitle("S1 signature")+ scale_colour_gradientn(colors=col),
+
+FeaturePlot(Myeloid_cells_common, reduction = "umap.snn",
+            features = signature.names[1], label = F, repel = TRUE, )+ggtitle("S1/2 signature")+ scale_colour_gradientn(colors=col),
+
+FeaturePlot(Myeloid_cells_common, reduction = "umap.snn",
+            features = signature.names[2], label = F, repel = TRUE)+ggtitle("S3 signature")+ scale_colour_gradientn(colors=col))
+#dev.off()
+
+
+DimPlot(Myeloid_cells_common ,reduction = "umap.snn", label = T)
+```
+
+
+ASPC MASLD signature modules in heatmaps by Myeloid subclusters 
+```{r}
+
+
+ASPCs_common <- AddModuleScore_UCell(ASPCs_common, features = ASPC)
+
+signature.names <- paste0(names(ASPC), "_UCell")
+
+VlnPlot(ASPCs_common, features = signature.names,pt.size=0)
+
+my_levels <- c("DPP4+","CXCL14+","PPARG+","EPHA3+","PLAU+")
+ASPCs_common$Annotation<- factor(ASPCs_common$Annotation, levels=rev(my_levels))
+
+
+Ucell_HM_data<-FetchData(object = ASPCs_common, vars = c(signature.names, "Annotation", "Donor"))
+
+Ucell_HM_data_long<-pivot_longer(Ucell_HM_data, signature.names)
+
+Ucell_HM_data_long_mean<-Ucell_HM_data_long%>%
+  group_by(Annotation, name) %>%
+  summarize(mean_value = mean(value, na.rm = TRUE))
+
+Ucell_HM_data_long_mean$name<-factor(Ucell_HM_data_long_mean$name, levels=c("cluster2_genes_UCell","cluster1_genes_UCell"))
+
+
+
+#pdf("/work/without_ambientRNAremoval/figures/4I_ucell_modulescore_genesignatures.pdf", width = 2.5, height = 2.5)
+
+
+ggplot(Ucell_HM_data_long_mean, aes(x=Annotation,y=name,fill=mean_value))+ geom_tile()+coord_flip()+
+    scale_fill_continuous(name="mean \nmodule \nscore",low = "deepskyblue4", high = "red")+theme_classic()+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),legend.key.size = unit(0.1, 'cm'), #change legend key size
+        legend.key.height = unit(0.3, 'cm'), #change legend key height
+        legend.key.width = unit(0.3, 'cm'), #change legend key width
+        legend.title = element_text(size=10), #change legend title font size
+        legend.text = element_text(size=8))+ #change legend text font size)
+  scale_y_discrete(labels = c("S1/S2 signature", "S3 signature"))
+
+#dev.off()
+
+```
+statistics not shown in manuscript because it was too complex to add in a nice way
+```{r,fig.height=7 ,fig.width=7}
+Ucell_HM_data_long_mean_donor<-Ucell_HM_data_long%>%
+  group_by(Annotation, Donor, name) %>%
+  summarize(mean_value = mean(value, na.rm = TRUE))
+
+#cluster 1
+kruskal.test(mean_value ~ Annotation, data = Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster1_genes_UCell",])
+
+
+pairwise.wilcox.test(Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster1_genes_UCell",]$mean_value, Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster1_genes_UCell",]$Annotation,
+                 p.adjust.method = "BH")
+
+
+#cluster 2
+kruskal.test(mean_value ~ Annotation, data = Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster2_genes_UCell",])
+
+
+pairwise.wilcox.test(Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster2_genes_UCell",]$mean_value, Ucell_HM_data_long_mean_donor[Ucell_HM_data_long_mean_donor$name== "cluster2_genes_UCell",]$Annotation,
+                 p.adjust.method = "BH")
+
+
+
+```
+ASPC MASLD signature modules in featureplots in subsetted ASPC object
+```{r,fig.height=5 ,fig.width=7}
+
+DimPlot(ASPCs_common, reduction = "umap.snn", label = T)
+
+
+blu_org<-colorRampPalette(c("deepskyblue4","darkorange"),bias=1)
+org_red<-colorRampPalette(c("darkorange","#B22222"),bias=1)
+
+col<-c(blu_org(30),org_red(30))
+
+#pdf("/work/without_ambientRNAremoval/figures/S4G_Ucell_ASPC_UMAPs.pdf", width = 11, height = 4)
+
+
+wrap_plots(
+FeaturePlot(ASPCs_common, reduction = "umap.snn",
+            features = signature.names[2], label = F, repel = TRUE)+ggtitle("S1/2 signature")+ scale_colour_gradientn(colors=col),
+
+FeaturePlot(ASPCs_common, reduction = "umap.snn",
+            features = signature.names[1], label = F, repel = TRUE, )+ggtitle("S3 signature")+ scale_colour_gradientn(colors=col))
+
+
+#dev.off()
+
+```
+
+
+```{r}
+
+Adipocytes_common <- AddModuleScore_UCell(Adipocytes_common, features = Adipocyte)
+AA_common <- AddModuleScore_UCell(AA_common, features = Adipocyte)
+
+```
+
+
+```{r,fig.height=5 ,fig.width=8}
+
+signature.names <- paste0(names(Adipocyte), "_UCell")
+
+VlnPlot(Adipocytes_common, features = signature.names[c(1,3,2)], group.by = "saf", pt.size=0, cols=c("#00AFBB", "#E7B800", "#FC4E07"))
+
+```
+
+
+```{r,fig.height=5 ,fig.width=8}
+
+signature.names <- paste0(names(Adipocyte), "_UCell")
+
+VlnPlot(AA_common[,AA_common$Annotation %in% c("SFRP4HI", "ADH1BHI")],features = signature.names[c(1,3,2)], group.by = "Annotation", pt.size=0)
+
+```
+
+
+```{r,fig.height=5 ,fig.width=6}
+my_levels <- c("DPP4+","CXCL14+","PPARG+","EPHA3+","PLAU+","SFRP4HI", "ADH1BHI")
+AA_common$Annotation<- factor(AA_common$Annotation, levels=rev(my_levels))
+
+
+Ucell_HM_data<-FetchData(object = AA_common, vars = c(signature.names, "Annotation", "Donor"))
+
+Ucell_HM_data_long<-pivot_longer(Ucell_HM_data, signature.names)
+
+Ucell_HM_data_long_mean<-Ucell_HM_data_long%>%
+  group_by(Annotation, name) %>%
+  summarize(mean_value = mean(value, na.rm = TRUE))
+
+Ucell_HM_data_long_mean$name<-factor(Ucell_HM_data_long_mean$name, levels=c("cluster3_genes_UCell","cluster1_genes_UCell", "cluster2_genes_UCell" ))
+
+Ucell_HM_data_long_mean<-Ucell_HM_data_long_mean %>% filter(Annotation %in% c("SFRP4HI", "ADH1BHI") )
+
+#pdf("/work/without_ambientRNAremoval/figures/5_ucell_modulescore_genesignatures_HA_UHA.pdf", width = 3.5, height = 2.5)
+
+ggplot(Ucell_HM_data_long_mean, aes(x=Annotation,y=name,fill=mean_value))+ geom_tile()+coord_flip()+
+    scale_fill_continuous(name="mean \nmodule \nscore",low = "deepskyblue4", high = "red")+theme_classic()+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),legend.key.size = unit(0.1, 'cm'), #change legend key size
+        legend.key.height = unit(0.3, 'cm'), #change legend key height
+        legend.key.width = unit(0.3, 'cm'), #change legend key width
+        legend.title = element_text(size=10), #change legend title font size
+        legend.text = element_text(size=8))+ #change legend text font size)
+  scale_y_discrete(labels = c("S1 signature","S2/S3 signature" ,"S3 signature"))
+
+#dev.off()
+
+```
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,180 @@
+---
+title: "Subsetting and manual cleaning of Adipocytes"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(ggplot2)
+seurat_common <- qread("/work/without_ambientRNAremoval/data/seurat_object_annotated.qs")
+#Adipocytes_common<-qread("/work/without_ambientRNAremoval/data/Adipocytes_common.qs")
+
+
+#qsave(Adipocytes_common,"/work/without_ambientRNAremoval/data/Adipocytes_common.qs")
+```
+
+```{r}
+Adipocytes <-subset(seurat_common, idents = "Adipocytes" )
+
+Adipocytes_donor_list <- Adipocytes %>%
+  SplitObject(split.by = "Donor")
+
+#Adipocytes_donor_list <- Adipocytes_common %>%
+#  SplitObject(split.by = "Donor")
+
+# 2. LogNormalize RNA data
+Adipocytes_donor_list <- lapply(Adipocytes_donor_list, function(seurat_obj){
+  output <- Seurat::NormalizeData(seurat_obj,
+                                  assay = "RNA",
+                                  verbose = TRUE)
+  return(output)
+})
+
+
+
+Adipocytes_common <- purrr::reduce(Adipocytes_donor_list, merge)
+DefaultAssay(Adipocytes_common) <- "RNA"
+
+Adipocytes_common<-Seurat::FindVariableFeatures(Adipocytes_common,
+                                  assay = "RNA",
+                                  verbose = TRUE)
+
+ 
+Adipocytes_common <- ScaleData(Adipocytes_common, split.by="Donor")
+
+
+
+Adipocytes_common <- Adipocytes_common %>%
+  RunPCA(seed.use = 1000,
+         verbose = TRUE)
+```
+
+
+```{r}
+Adipocytes_common <- Adipocytes_common %>%
+  harmony::RunHarmony(
+    group.by.vars = "Pool",
+    assay.use = 'RNA',
+    reduction.save = 'harmony.pca.RNA',
+    project.dim = F,
+    kmeans_init_nstart=20,
+    kmeans_init_iter_max=100
+  )
+
+# UMAP
+Adipocytes_common <- Adipocytes_common %>%
+  Seurat::RunUMAP(
+    dims = 1:20,
+    reduction = 'harmony.pca.RNA',
+    reduction.name = 'umap.rna',
+    reduction.key = 'rnaUMAP_',
+    seed.use = 1000,
+    verbose = TRUE)
+
+```
+
+```{r}
+Adipocytes_common <- Adipocytes_common %>%
+  Seurat::FindNeighbors(reduction = "harmony.pca.RNA",
+                        dims = 1:20, compute.SNN = TRUE)%>% 
+  Seurat::FindNeighbors(reduction = "harmony.pca.RNA",
+                        dims = 1:20, return.neighbor = TRUE)
+#Do twice. Once with compute.SNN = TRUE, once with return.neighbor = TRUE. Can't run both
+
+
+# Run UMAP dimensional reduction based on WNN
+Adipocytes_common <- Adipocytes_common %>%
+  RunUMAP(
+    nn.name = "RNA.nn",
+    reduction.name = "umap.snn",
+    reduction.key = "snnUMAP_",
+    seed.use = 1000)
+
+# Cluster determination
+Adipocytes_common <- Adipocytes_common %>%
+  FindClusters(
+    graph.name = "RNA_snn",
+    algorithm = 3,
+    res =0.3,
+    random.seed = 1000,
+    verbose = TRUE
+  )
+
+```
+
+
+```{r}
+
+
+snn_dim <- DimPlot(Adipocytes_common,
+                   reduction = 'umap.snn',
+                   label.size = 3,
+                   label = TRUE)
+
+snn_harmony <- DimPlot(Adipocytes_common,
+                       reduction = 'umap.snn',
+                       group.by = "Pool",
+                       label.size = 3)
+snn_saf <- DimPlot(Adipocytes_common,
+                       reduction = 'umap.snn',
+                       group.by = "saf",
+                       label.size = 3)
+snn_donor <- DimPlot(Adipocytes_common,
+                       reduction = 'umap.snn',
+                       group.by = "Donor",
+                       label.size = 3, split.by = "saf")
+snn_splitsaf<-DimPlot(Adipocytes_common, reduction = 'umap.snn',
+                       label.size = 3, split.by = "saf")
+snn_dim 
+snn_harmony
+snn_saf
+snn_donor
+snn_splitsaf
+
+```
+
+```{r}
+Adipocyte.markers <- FindAllMarkers(Adipocytes_common, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+Adipocyte.markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 2, order_by = avg_log2FC)
+
+Adipocyte.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+
+top10
+Adipocytes_heatmap<-DoHeatmap(Adipocytes_common, features = top10$gene) + NoLegend()
+
+Adipocytes_heatmap
+```
+
+I used the publically available singe cell atlas "WATLAS" to identify clusters contaminated with forgein cell types and removed them manually.
+
+https://singlecell.broadinstitute.org/single_cell/study/SCP2289/a-single-cell-atlas-of-human-and-mouse-white-adipose-tissue
+```{r}
+top10[top10$cluster %in% c(2:7),]$gene
+
+```
+
+```{r}
+Adipocytes_common_clean<-subset(Adipocytes_common, idents = c("0","1"))
+
+qsave(Adipocytes_common_clean,"/work/without_ambientRNAremoval/data/Adipocytes_common_clean.qs")
+```
+
+
+
+

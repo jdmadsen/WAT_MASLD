@@ -1,0 +1,151 @@
+---
+title: "Annotation of snRNA samples"
+author: "Aino R. Peltonen"
+date: "`r Sys.Date()`"
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+#| message: false
+library(magrittr)
+library(dplyr)
+library(knitr)
+library(qs)
+library(scHelper)
+library(parallel)
+library(ggplot2)
+library(DESeq2)
+library(tidyr)
+library(DelayedMatrixStats)
+library(Seurat)
+
+#is important for it to work with cacoa later
+options(Seurat.object.assay.version = "v3")
+n.cores = 32
+
+seurat_common <- qread("../data/filtered_seurat_object.qs")
+```
+
+# First creating a seurat object of the cleaned data
+
+
+
+```{r chunk 3}
+seurat_donor_list <- seurat_common%>%
+  SplitObject(split.by = "Donor")
+
+# 2. LogNormalize RNA data
+seurat_donor_list <- lapply(seurat_donor_list, function(seurat_obj){
+  output <- Seurat::NormalizeData(seurat_obj,
+                                  assay = "RNA",
+                                  normalization.method = "LogNormalize",
+                                  scale.fator = 10000,
+                                  margin = 1,
+                                  verbose = TRUE)
+  return(output)
+})
+
+seurat_donor_list
+
+# seurat_donor_list <- lapply(seurat_donor_list , function(.x) {
+#   .x %>%
+#     ScaleData(assay = "RNA",
+#               model.use = "linear",
+#               do.scale = TRUE,
+#               do.center = FALSE,
+#               scale.max = 10,
+#               block.size = 1000,
+#               min.cells.to.block = 3000,
+#               verbose = TRUE)
+# })
+
+seurat_donor_list <- lapply(seurat_donor_list , function(.x) {
+  .x %>%
+    Seurat::SCTransform(assay = "RNA",
+                        variable.features.n = 3000,
+                        vst.flavor = "v2",
+                        verbose = TRUE,
+                        seed.use = 1000)
+})
+
+View(seurat_donor_list)
+
+#seurat_common <- Seurat:::merge.SCTAssay(seurat_donor_list)
+
+seurat_common <-  purrr::reduce(seurat_donor_list, merge)
+
+seurat_donor_list
+
+variable_features_rna <- Seurat::SelectIntegrationFeatures(seurat_donor_list,
+                                                           nfeatures = 3000)
+
+VariableFeatures(seurat_common[["SCT"]]) <- variable_features_rna
+
+seurat_common <- seurat_common%>%
+  RunPCA(assay = "SCT",
+         seed.use = 1000,
+         verbose = TRUE)
+```
+
+```{r}
+seurat_common <- seurat_common %>%
+  harmony::RunHarmony(
+    group.by.vars = "Pool",
+    assay.use = 'SCT',
+    reduction.save = 'harmony.pca.rna',
+    project.dim = F,
+    kmeans_init_nstart=20,
+    kmeans_init_iter_max=100
+  )
+
+seurat_common@meta.data$Pool
+# UMAP
+seurat_common <- seurat_common %>%
+  Seurat::RunUMAP(
+    dims = 1:20,
+    reduction = 'harmony.pca.rna',
+    reduction.name = 'umap.rna',
+    reduction.key = 'rnaUMAP_',
+    seed.use = 1000,
+    verbose = TRUE)
+```
+
+
+```{r}
+seurat_common <- seurat_common %>%
+  Seurat::FindNeighbors(reduction = "harmony.pca.rna",
+                        dims = 1:20, compute.SNN = TRUE)%>% 
+  Seurat::FindNeighbors(reduction = "harmony.pca.rna",
+                        dims = 1:20, return.neighbor = TRUE)
+#Do twice. Once with compute.SNN = TRUE, once with return.neighbor = TRUE. Can't run both
+
+
+# Run UMAP dimensional reduction based on WNN
+seurat_common <- seurat_common %>%
+  RunUMAP(
+    nn.name = "SCT.nn",
+    reduction.name = "umap.snn",
+    reduction.key = "snnUMAP_",
+    seed.use = 1000)
+
+# Cluster determination
+seurat_common <- seurat_common %>%
+  FindClusters(
+    graph.name = "SCT_snn",
+    algorithm = 3,
+    res = 0.1,
+    random.seed = 1000,
+    verbose = TRUE
+  )
+```
+
+```{r info}
+#qsave(seurat_common, #"/work/without_ambientRNAremoval/seurat_common_reclustered.qs")
+sessionInfo()
+```
+

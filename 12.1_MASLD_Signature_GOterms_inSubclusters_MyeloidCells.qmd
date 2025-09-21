@@ -1,0 +1,205 @@
+---
+title: "Fisher enrichment test of MASLD signature genes in subcluster markergenes, Myeloid cells"
+author: "Johanne D. Madsen"
+format: html
+editor: visual
+---
+
+```{r}
+require(openxlsx)
+library(clusterProfiler)
+library(readxl)
+library(org.Hs.eg.db)
+library(tidytable)
+library(purrr)
+library(dplyr)
+library(textshape)
+library(pheatmap)
+```
+
+```{r}
+
+MyeloidMarkers <- read_excel("/work/without_ambientRNAremoval/data/DElists/MyeloidMarkers.xlsx")
+
+extract_top_genes_by_cluster <- function(df, top_n = 200) {
+  unique_clusters <- unique(df$cluster)
+  
+  for (cluster in unique_clusters) {
+    # Step 1: Subset by cluster
+    cluster_genes <- df[df$cluster == cluster, ]
+
+    # Step 2: Order by adjusted p-value
+    cluster_genes <- cluster_genes[order(cluster_genes$p_val_adj), ]
+
+    # Step 3: Extract top N gene names
+    top_genes <- head(cluster_genes$gene, top_n)
+
+    # Clean cluster name for variable (remove "+" if present)
+    cluster_clean <- gsub("\\+", "", cluster)
+
+    # Create variable name (e.g., DPP4_genes)
+    var_name <- paste0(cluster_clean, "_genes")
+
+    # Assign to global environment
+    assign(var_name, top_genes, envir = .GlobalEnv)
+  }
+}
+
+
+
+
+extract_top_genes_by_cluster(MyeloidMarkers)
+
+```
+
+```{r}
+#Extracting full genesets for the top 5 GOterms for each signature
+
+GOgenes_Myeloid_S1_ID <-ego_simplified_Myeloid_S1@geneSets[names(ego_simplified_Myeloid_S1@geneSets) %in% top5_Myeloid_S1$ID]
+
+GOgenes_Myeloid_S1_ID_ordered<-GOgenes_Myeloid_S1_ID[top5_Myeloid_S1$ID]
+
+names(GOgenes_Myeloid_S1_ID_ordered)<-top5_Myeloid_S1$Description
+
+GOgenes_Myeloid_S1_list <- GOgenes_Myeloid_S1_ID_ordered
+
+#
+
+GOgenes_Myeloid_S23_ID <-ego_simplified_Myeloid_S23@geneSets[names(ego_simplified_Myeloid_S23@geneSets) %in% top5_Myeloid_S23$ID]
+
+GOgenes_Myeloid_S23_ID_ordered<-GOgenes_Myeloid_S23_ID[top5_Myeloid_S23$ID]
+
+names(GOgenes_Myeloid_S23_ID_ordered)<-top5_Myeloid_S23$Description
+
+GOgenes_Myeloid_S23_list <- GOgenes_Myeloid_S23_ID_ordered
+
+#
+
+GOgenes_Myeloid_S3_ID <-ego_simplified_Myeloid_S3@geneSets[names(ego_simplified_Myeloid_S3@geneSets) %in% top5_Myeloid_S3$ID]
+
+GOgenes_Myeloid_S3_ID_ordered<-GOgenes_Myeloid_S3_ID[top5_Myeloid_S3$ID]
+
+names(GOgenes_Myeloid_S3_ID_ordered)<-top5_Myeloid_S3$Description
+
+GOgenes_Myeloid_S3_list <- GOgenes_Myeloid_S3_ID_ordered
+
+```
+
+```{r}
+#making a function to run Fisher enrichment test 
+
+run_fisher_enrichment <- function(go_list, test_genes, background_genes) {
+  results <- lapply(names(go_list), function(go_term) {
+    go_genes <- go_list[[go_term]]
+    # Ensure we're working within the background only
+    go_genes <- intersect(go_genes, background_genes)
+    test_genes_bg <- intersect(test_genes, background_genes)
+
+    # Build contingency table
+    A <- length(intersect(test_genes_bg, go_genes))
+    B <- length(setdiff(test_genes_bg, go_genes))
+    C <- length(setdiff(go_genes, test_genes_bg))
+    D <- length(setdiff(background_genes, union(go_genes, test_genes_bg)))
+
+    contingency <- matrix(c(A, B, C, D), nrow = 2, byrow = TRUE)
+    ft <- fisher.test(contingency)
+
+    data.frame(
+      GO_term = go_term,
+      p_value = ft$p.value,
+      odds_ratio = ft$estimate,
+      overlap = A,
+      GO_size = length(go_genes),
+      test_set_size = length(test_genes_bg),
+      gene_ratio = A / length(go_genes)
+    )
+  })
+
+  # Combine into a single data.frame and adjust p-values
+  results_df <- do.call(rbind, results)
+  results_df$adj_p_value <- p.adjust(results_df$p_value, method = "BH")
+  results_df <- results_df[order(results_df$adj_p_value), ]
+  return(results_df)
+}
+
+```
+
+```{r}
+gene_sets <- list(
+  cDC1 = c(cDC1_genes),
+  cDC2_CCR7 = c(`cDC2 (CCR7)_genes`),
+  cDC2_CDC1c = c(`cDC2 (CDC1c)_genes`),
+  ATM = c(ATM_genes),
+  LAM = c(LAM_genes),
+  cMon = c(`classical Monocytes_genes`),
+  ncMon =c(`non-classical Monocytes_genes`)
+)
+
+go_lists <- list(
+  Myeloid_S1 = GOgenes_Myeloid_S1_list,
+  Myeloid_S23 = GOgenes_Myeloid_S23_list,
+  Myeloid_S3 = GOgenes_Myeloid_S3_list
+)
+
+```
+
+```{r}
+all_results <- list()
+
+for (Celltype in names(gene_sets)) {
+  for (go_label in names(go_lists)) {
+    result <- run_fisher_enrichment(go_lists[[go_label]], gene_sets[[Celltype]], background_list_Myeloid_cells)
+    result$Celltype <- Celltype
+    result$GOsource <- go_label
+    all_results[[paste(Celltype, go_label, sep = "_")]] <- result
+  }
+}
+
+# Combine into one dataframe
+combined_results <- do.call(rbind, all_results)
+
+```
+
+```{r, fig.width=10}
+library(ggplot2)
+
+combined_results
+# Combine GO term order while tagging source
+
+# Remove leading/trailing whitespace from GO term names
+go_term_order <- c(
+  paste0("Myeloid_S1__", trimws(names(GOgenes_Myeloid_S1_list))),
+  paste0("Myeloid_S23__", trimws(names(GOgenes_Myeloid_S23_list))),
+  paste0("Myeloid_S3__", trimws(names(GOgenes_Myeloid_S3_list)))
+)
+
+
+combined_results$GO_combined <- paste(combined_results$GOsource, combined_results$GO_term, sep = "__")
+
+# Factor with correct order
+combined_results$GO_combined <- factor(combined_results$GO_combined, levels = rev(go_term_order))
+
+
+my_levels <- c("ATM","LAM","cMon","ncMon","cDC1","cDC2_CDC1c", "cDC2_CCR7")
+combined_results$Celltype <- factor(combined_results$Celltype, levels = my_levels)
+
+pdf("/work/without_ambientRNAremoval/figures/GO_myeloid_signatures.pdf", width = 10, height=7)
+
+ggplot(combined_results, aes(x = Celltype, y = GO_combined)) +
+  geom_point(aes(size = gene_ratio, color = -log10(adj_p_value)))  +
+  scale_color_gradientn(
+    colors = c("white", "tomato", "firebrick"),
+    values = scales::rescale(c(0, 2, max(-log10(combined_results$adj_p_value), na.rm = TRUE))),
+    limits = c(0, max(-log10(combined_results$adj_p_value), na.rm = TRUE))
+  )+
+  theme_minimal() +
+  labs(
+    title = "GO Term Enrichment Dotplot",
+    x = "",
+    y = "GO Term",
+    size = "Gene ratio",
+    color = "-log10(adj_p_value)"
+  )
+dev.off()
+
+```

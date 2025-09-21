@@ -1,0 +1,273 @@
+---
+title: "continued GO term analysis of MASLD gene signatures from Myeloid cells, ASPCs and Adipocytes "
+author: "Johanne D. Madsen"
+format: html
+editor: visual
+---
+
+```{r}
+require(openxlsx)
+library(clusterProfiler)
+library(readxl)
+library(org.Hs.eg.db)
+library(tidytable)
+library(purrr)
+library(dplyr)
+library(textshape)
+library(pheatmap)
+library(qs)
+
+```
+
+```{r}
+
+file_path <- "/work/without_ambientRNAremoval/data/Kmeans_clusters_seed30_p01_Adipocytes_1v1_chosen.xlsx"
+Adipocytes <- read.xlsx(file_path)
+
+colnames(Adipocytes)<-c("gene","cluster")
+
+Adipocytes_S1=as.vector(Adipocytes$gene[Adipocytes$cluster == 2])
+Adipocytes_S23=as.vector(Adipocytes$gene[Adipocytes$cluster == 1])
+Adipocytes_S3=as.vector(Adipocytes$gene[Adipocytes$cluster == 3])
+
+
+file_path <- "/work/without_ambientRNAremoval/data/Kmeans_clusters_seed30_p01_Myeloid_1v1_chosen.xlsx"
+Myeloid <- read.xlsx(file_path)
+
+colnames(Myeloid)<-c("gene","cluster")
+
+Myeloid_S1=as.vector(Myeloid$gene[Myeloid$cluster == 3])
+Myeloid_S23=as.vector(Myeloid$gene[Myeloid$cluster == 1])
+Myeloid_S3=as.vector(Myeloid$gene[Myeloid$cluster == 2])
+ 
+file_path <- "/work/without_ambientRNAremoval/data/Kmeans_clusters_seed600_p01_ASPCs_2clusters_1v1_chosen.xlsx"
+ASPC <- read.xlsx(file_path)
+
+colnames(ASPC)<-c("gene","cluster")
+
+ASPC_S12=as.vector(ASPC$gene[ASPC$cluster == 2])
+ASPC_S3=as.vector(ASPC$gene[ASPC$cluster == 1])
+
+
+```
+
+```{r, results="hide"}
+   
+ multiplesheets <- function(fname) { 
+    
+   # getting info about all excel sheets 
+   sheets <- readxl::excel_sheets(fname) 
+   tibble <- lapply(sheets, function(x) readxl::read_excel(fname, sheet = x,col_names=T)) 
+   data_frame <- lapply(tibble, as.data.frame) 
+     
+   # assigning names to data frames 
+   names(data_frame) <- sheets 
+     
+   # print data frame 
+   print(data_frame) 
+ } 
+   
+ # specifying the path name 
+List_DE_S1S2<-multiplesheets("/work/without_ambientRNAremoval/data/DElists/List_DE_caoS1S2.xlsx")
+List_DE_S1S3<-multiplesheets("/work/without_ambientRNAremoval/data/DElists/List_DE_caoS1S3.xlsx")
+List_DE_S2S3<-multiplesheets("/work/without_ambientRNAremoval/data/DElists/List_DE_caoS2S3.xlsx")
+ 
+
+ 
+ List_DE_S1S2<-lapply(List_DE_S1S2, function(x){rownames(x)<-x[,1]
+return(x)} )
+ 
+ List_DE_S1S3<-lapply(List_DE_S1S3, function(x){rownames(x)<-x[,1]
+return(x)} )
+ 
+ List_DE_S2S3<-lapply(List_DE_S2S3, function(x){rownames(x)<-x[,1]
+return(x)} )
+```
+
+```{r, results="hide"}
+
+background_list_adipocytes<-unique(c(List_DE_S1S2$Adipocytes$Gene,
+  List_DE_S1S3$Adipocytes$Gene,
+  List_DE_S2S3$Adipocytes$Gene
+  ))
+
+length(background_list_adipocytes)
+
+background_list_Myeloid_cells<-unique(c(List_DE_S1S2$Myeloid_cells$Gene,
+  List_DE_S1S3$Myeloid_cells$Gene,
+  List_DE_S2S3$Myeloid_cells$Gene
+  ))
+length(background_list_Myeloid_cells)
+
+background_list_ASPCs<-unique(c(List_DE_S1S2$ASPCs$Gene,
+  List_DE_S1S3$ASPCs$Gene,
+  List_DE_S2S3$ASPCs$Gene
+  ))
+
+length(background_list_ASPCs)
+
+
+background_list_all<-unique(c(background_list_adipocytes,background_list_ASPCs,background_list_Myeloid_cells))
+length(background_list_all)
+
+```
+
+```{r}
+library(qs)
+
+# List of simplified GO result names
+sample_names <- c(
+  "Ads_S1", "Ads_S23", "Ads_S3",
+  "ASPC_S12", "ASPC_S3",
+  "Myeloid_S1", "Myeloid_S23", "Myeloid_S3"
+)
+
+# Directory where .qs files are saved
+qs_path <- "/work/without_ambientRNAremoval/data"
+
+# Load each file and assign to the correct variable name
+for (name in sample_names) {
+  var_name <- paste0("ego_simplified_", name)
+  file_path <- file.path(qs_path, paste0("ego_simplified_", name, ".qs"))
+  assign(var_name, qread(file_path))
+}
+
+
+```
+
+```{r}
+
+# Extract and assign each as data frame with selected columns
+for (name in sample_names) {
+  ego_var <- get(paste0("ego_simplified_", name))
+  df <- as.data.frame(ego_var)[, c("Description", "p.adjust","ID","geneID")]
+  assign(paste0("df_", name), df)
+}
+
+for (name in sample_names) {
+  df <- get(paste0("df_", name))
+  top <- df %>% arrange(p.adjust) #%>% slice_head(n = 5)
+  assign(paste0("top_", name), top)
+}
+
+
+top5_Ads_S1<-top_Ads_S1[c(1,3,4,6,7),]
+
+top5_Ads_S23<-top_Ads_S23[c(1,4,5,6,7),]
+
+top5_Ads_S3<-top_Ads_S3[1:5,]
+
+top5_ASPC_S12 <-top_ASPC_S12[c(1,2,4,5,6),]
+
+top5_ASPC_S12 <-top_ASPC_S12[c(1,2,4,5,6),]
+
+top5_ASPC_S3<-top_ASPC_S3[c(1,2,3,5,6),]
+
+top5_ASPC_S3<-top_ASPC_S3[c(1,2,3,5,6),]
+
+top5_Myeloid_S1<-top_Myeloid_S1[1:5,]
+
+top5_Myeloid_S23<-top_Myeloid_S23[1:5,]
+
+top5_Myeloid_S3<-top_Myeloid_S3[c(1,2,4,5,6),]
+
+
+ordered_terms_SC <- c(top5_Myeloid_S1$Description, top5_Myeloid_S23$Description, top5_Myeloid_S3$Description,top5_ASPC_S12$Description, top5_ASPC_S3$Description,top5_Ads_S1$Description, top5_Ads_S23$Description, top5_Ads_S3$Description)
+
+```
+
+```{r}
+
+for (name in sample_names) {
+  ego_var <- get(paste0("ego_simplified_", name))
+  df <- as.data.frame(ego_var)[, c("Description", "p.adjust")]
+  assign(paste0("df_", name), df)
+}
+
+# Create a helper function to rename columns based on the list index
+rename_columns <- function(df, label) {
+  colnames(df)[!colnames(df) %in% "Description"] <- paste0(colnames(df)[!colnames(df) %in% "Description"], "_", label)
+  df
+}
+
+# Apply it to each dataframe in the list
+df_list <- list(
+  Myeloid_S1 = df_Myeloid_S1,
+  Myeloid_S23 = df_Myeloid_S23,
+  Myeloid_S3 = df_Myeloid_S3,
+  ASPC_S12 = df_ASPC_S12,
+  ASPC_S3 = df_ASPC_S3,  
+  Ads_S1 = df_Ads_S1,
+  Ads_S23 = df_Ads_S23,
+  Ads_S3 = df_Ads_S3
+)
+
+df_list_renamed <- Map(rename_columns, df_list, names(df_list))
+
+# Now safely reduce
+merged_SC <- reduce(df_list_renamed, full_join, by = "Description")
+
+
+colnames(merged_SC) <- c("Description", "Myeloid_S1", "Myeloid_S23", "Myeloid_S3", "ASPC_S12", "ASPC_S3",
+                         "Ads_S1", "Ads_S23", "Ads_S3")
+
+
+# Step 4: Compute -log10(p.adjust)
+log_padj_SC <- merged_SC %>%
+  mutate(across(-Description, ~ -log10(.), .names = "log_{.col}"))
+
+
+# Step 5: Filter and order for heatmap
+heatmap_data_SC <- log_padj_SC %>%
+  filter(Description %in% ordered_terms_SC) %>%
+  slice(match(ordered_terms_SC, Description)) %>%
+  select(Description, starts_with("log_")) %>%
+  mutate(Description = make.unique(Description)) %>%
+  column_to_rownames("Description") %>%
+  as.matrix()
+
+# Step 6: Rename columns
+colnames(heatmap_data_SC) <- gsub("log_", "", colnames(heatmap_data_SC))
+```
+
+```{r, fig.height=7, fig.width=7}
+# optional: Filter to retain only rows where at least one adjusted p-value is < 0.1
+heatmap_data_SC_filtered <- heatmap_data_SC#[rowSums(heatmap_data_SC > 1, na.rm = TRUE) > 0, ]
+
+
+# Step 7: Plot heatmap
+
+# Define breaks from 0 to 10
+breaks_list <- seq(0, 5, length.out = 51)
+
+# Plot heatmap with fixed scale
+pheatmap(heatmap_data_SC_filtered,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         color = colorRampPalette(c("white", "blue"))(80),
+         breaks = breaks_list,
+         na_col = "white",
+         border_color = "grey70",
+         main = "Top 5 GO Terms per Cluster")
+
+
+library(grid)
+
+# Add custom legend title
+grid.text("-log10(padj)", x = 0.9, y = 0.7, rot=90, gp = gpar(fontsize = 10))
+
+rownames(heatmap_data_SC_filtered)
+
+pdf("/work/without_ambientRNAremoval/figures/GO_Samlet_heatmap.pdf")
+
+pheatmap(heatmap_data_SC_filtered,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         color = colorRampPalette(c("white", "blue"))(80),
+         breaks = breaks_list,
+         na_col = "white",
+         border_color = "grey70",
+         main = "Top 5 GO Terms per Cluster")
+
+dev.off()
+```
