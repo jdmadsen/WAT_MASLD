@@ -28,7 +28,7 @@ library(Seurat)
 options(Seurat.object.assay.version = "v3")
 n.cores = 32
 
-seurat_common <- qread("../data/filtered_seurat_object.qs")
+seurat_common <- qread("/work/WAT_MASLD/Data/filtered_seurat_object.qs")
 ```
 
 # First creating a seurat object of the cleaned data
@@ -52,17 +52,6 @@ seurat_donor_list <- lapply(seurat_donor_list, function(seurat_obj){
 
 seurat_donor_list
 
-# seurat_donor_list <- lapply(seurat_donor_list , function(.x) {
-#   .x %>%
-#     ScaleData(assay = "RNA",
-#               model.use = "linear",
-#               do.scale = TRUE,
-#               do.center = FALSE,
-#               scale.max = 10,
-#               block.size = 1000,
-#               min.cells.to.block = 3000,
-#               verbose = TRUE)
-# })
 
 seurat_donor_list <- lapply(seurat_donor_list , function(.x) {
   .x %>%
@@ -74,8 +63,6 @@ seurat_donor_list <- lapply(seurat_donor_list , function(.x) {
 })
 
 View(seurat_donor_list)
-
-#seurat_common <- Seurat:::merge.SCTAssay(seurat_donor_list)
 
 seurat_common <-  purrr::reduce(seurat_donor_list, merge)
 

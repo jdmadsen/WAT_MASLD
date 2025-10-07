@@ -40,20 +40,20 @@ If the saved cms objects already exist, they are loaded to the R environment ins
 ```{r chunk 1}
 #| message: false
 
-data_list <- list.files(path = c("../data/", "../data-raw/", "../data/doubletremoval/"))
+data_list <- list.files(path = c("/work/WAT_MASLD/Data/","/work/WAT_MASLD/Data/doubletremoval/"))
 
 if("crm_environment.RData" %in% data_list){
-    load("../data/crm_environment.RData")
+    load("/work/WAT_MASLD/Data/crm_environment.RData")
 } else{
     source("../R/2_Data_load_and_filtering_based_on_demux_snM.R")
-    data_list <- list.files(path = c("../data/", "../data-raw/"))
+    data_list <- list.files(path = c("/work/WAT_MASLD/Data/","/work/WAT_MASLD/Data/doubletremoval/"))
 }
 ```
 
 Checking the number of cells in each of the objects
 ```{r chunk 2}
 if("total_cells_before_cleanup.RData" %in% data_list){
-    load("../data/total_cells_before_cleanup.RData")
+    load("/work/WAT_MASLD/Data/total_cells_before_cleanup.RData")
 } else {
     length_list<-lapply(crm$cms, function(x) length(colnames(x)))
     cells_crm <-sum(unlist(length_list))
@@ -76,7 +76,7 @@ From this we can create the initial UMAP.
 if (is.null(crm$cms.preprocessed)){
     crm$doPreprocessing()
     crm$createEmbedding()
-    save(crm, file = "../data/crm_environment.RData")
+    save(crm, file = "/work/WAT_MASLD/Data/crm_environment.RData")
 }
 
 crm$plotEmbedding(plot.na = F, 
@@ -102,12 +102,12 @@ Let's try what removing doublets does, although technically there shouldn't be d
 ```{r chunk 4}
 if("DOUBLETDETECTION.py" %in% data_list == FALSE){
     crm$detectDoublets(method = "doubletdetection", export = TRUE, 
-                       data.path = "/work/with_ambientRNAremoval/data/doubletremoval/")
+                       data.path = "/work/WAT_MASLD/Data/doubletremoval/")
 } else if(exists("doublets", where = crm)){
     
 } else if("*.doubletdetection" %in% data_list){
-    crm$addDoublets(method = "doubletdetection", data.path = "../data/doubletremoval/")
-    save(crm, file = "../data/crm_environment.RData")
+    crm$addDoublets(method = "doubletdetection", data.path = "/work/WAT_MASLD/Data/doubletremoval/")
+    save(crm, file = "/work/WAT_MASLD/Data/crm_environment.RData")
 } else{
     cat("There is a problem with doublets.")
 }
@@ -156,7 +156,7 @@ if(exists("cms.filtered", where = crm) == FALSE){
     crm$filterCms(depth.cutoff = 1e3, mito.cutoff = 0.02, 
                   species = "human", doublets = "doubletdetection")
     crm$cms.preprocessed <- NULL
-    save(crm, file = "../data/crm_environment_filtered_002.RData")
+    save(crm, file = "/work/WAT_MASLD/Data/crm_environment_filtered_002.RData")
 }
 
 length_list_crm <- lapply(crm$cms, function(x) length(colnames(x)))
@@ -181,10 +181,10 @@ if (is.null(crm$cms.preprocessed)){
     crm$doPreprocessing(cms = crm$cms.filtered)
     crm$createEmbedding()
     # crm$cms.filtered <- NULL
-    save(crm, file = "../data/crm_environment_filtered_002.RData")
-    data_list <- list.files(path = c("../data/", "../data-raw/"))
+    save(crm, file = "/work/WAT_MASLD/Data/crm_environment_filtered_002.RData")
+    data_list <- list.files(path = c("/work/WAT_MASLD/Data/","/work/WAT_MASLD/Data/doubletremoval/"))
 } else{
-    load("../with_ambientRNAremoval/data/crm_environment_filtered_002.RData")
+    load("work/WAT_MASLD/Data/crm_environment_filtered_002.RData")
 }
 ```
 
@@ -252,7 +252,7 @@ crm$plotEmbedding(plot.na = F,
 # if("crm_environment_filtered_002.RData" %in% data_list){
 #     crm$filterCms(depth.cutoff = 1e3, mito.cutoff = 0.02, 
 #                   species = "human", doublets = "doubletdetection")
-#     save(crm, file = "../data/crm_environment_filtered_002.RData")
+#     save(crm, file = "/work/WAT_MASLD/Data/crm_environment_filtered_002.RData")
 # }
 # 
 # length_list_crm <- lapply(crm$cms, function(x) length(colnames(x)))
@@ -269,13 +269,13 @@ crm$plotEmbedding(plot.na = F,
 #| warning: false
 
 # if("crm_environment_filtered_002.RData" %in% data_list){
-#     load("../data/crm_environment_filtered_002.RData")
+#     load("/work/WAT_MASLD/Data/crm_environment_filtered_002.RData")
 # } else{
 #     crm$doPreprocessing(cms = crm$cms.filtered)
 #     crm$createEmbedding()
 #     crm$cms.filtered <- NULL
 #     save(crm, file = "../data/crm_environment_filtered_002.RData")
-#     data_list <- list.files(path = c("../data/", "../data-raw/"))
+#     data_list <- list.files(path = c("/work/WAT_MASLD/Data/","/work/WAT_MASLD/Data/doubletremoval/"))
 # }
 ```
 

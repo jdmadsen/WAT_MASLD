@@ -17,7 +17,6 @@ library(CRMetrics)
 library(knitr)
 library(sccore)
 library(qs)
-#library(scHelper)
 library(parallel)
 library(pagoda2)
 library(conos)
@@ -37,24 +36,24 @@ First the data aligned with CellRanger is loaded and filtered based on demultipl
 If the saved cms objects already exist, they are loaded to the R environment instead of creating new ones with the scripts.
 
 ```{r chunk 1}
-data_list <- list.files(path = c("../data/", "../data-raw/", "../"))
+data_list <- list.files(path = c("/work/WAT_MASLD/Data/","/work/WAT_MASLD/Data/doubletremoval/"))
 
 if("crm_environment.RData" %in% data_list){
-    load("../data/crm_environment.RData")
+    load("/work/WAT_MASLD/Data/crm_environment.RData")
 } else if("cms_objects_raw.RData" %in% data_list){
-    load("../data-raw/cms_objects_raw.RData")
+    load("/work/WAT_MASLD/Data/cms_objects_raw.RData")
 } else {
-    source("../R/1_Data_load_and_filtering_snRNA.R")
-    source("../R/2_Data_load_and_filtering_snMultiomeRNA.R")
-    save(cms1, cms2, file = "../data-raw/cms_objects_raw.RData")
-    data_list <- list.files(path = c("../data/", "../data-raw/"))
+    source("/work/WAT_MASLD/R/1_Data_load_and_filtering_snRNA.R")
+    source("/work/WAT_MASLD/R/2_Data_load_and_filtering_snMultiomeRNA.R")
+    save(cms1, cms2, file = "/work/WAT_MASLD/Data/cms_objects_raw.RData")
+    data_list <- list.files(path = c("/work/WAT_MASLD/Data/","/work/WAT_MASLD/Data/doubletremoval/"))
 }
 
 if("crm_environment.RData" %in% data_list == FALSE){
-    source("../R/3_Create_crm_environment.R")
+    source("/work/WAT_MASLD/3_Create_crm_environment.R")
 
     save(crm, file = "../data/crm_environment.RData")
-    data_list <- list.files(path = c("../data/", "../data-raw/"))
+    data_list <- list.files(path = c(path = c("/work/WAT_MASLD/Data/","/work/WAT_MASLD/Data/doubletremoval/"))
 }
 ```
 
@@ -166,7 +165,7 @@ if(exists("cms.filtered", where = crm) == FALSE){
     crm$filterCms(depth.cutoff = 1e3, mito.cutoff = 0.02, 
                   species = "human", doublets = "doubletdetection")
     crm$cms.preprocessed <- NULL
-    save(crm, file = "../data/crm_environment_filtered_002.RData")
+    save(crm, file = "/work/WAT_MASLD/crm_environment_filtered_002.RData")
 }
 
 if("total_cells_first_filtering.RData" %in% data_list == FALSE){
@@ -176,9 +175,9 @@ if("total_cells_first_filtering.RData" %in% data_list == FALSE){
     cells_crm.filtered005 <-sum(unlist(length_list_crm.filtered))
     cells_removed <- cells_crm - cells_crm.filtered005
     total_cells <- data.frame(cells_crm, cells_crm.filtered005, cells_removed)
-    save(total_cells, file = "../data/total_cells_first_filtering.RData")
+    save(total_cells, file = "/work/WAT_MASLD/total_cells_first_filtering.RData")
 } else{
-    load("../data/total_cells_first_filtering.RData")
+    load("/work/WAT_MASLD/total_cells_first_filtering.RData")
 }
 total_cells
 ```
@@ -197,7 +196,7 @@ if(is.null(crm$cms.preprocessed)){
     crm$createEmbedding()
     # crm$cms.filtered <- NULL
     save(crm, file = "../data/crm_environment_filtered_002.RData")
-    data_list <- list.files(path = c("../data/", "../data-raw/"))
+    data_list <- list.files(path = c("/work/WAT_MASLD/Data/","/work/WAT_MASLD/Data/doubletremoval/"))
 } else{
     load("../data/crm_environment_filtered_002.RData")
 }
