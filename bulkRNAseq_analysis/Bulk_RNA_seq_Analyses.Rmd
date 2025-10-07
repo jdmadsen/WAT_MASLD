@@ -1,0 +1,1097 @@
+---
+title: "Bulk_RNA_seq_WAT_MASH"
+author: "Anne Loft"
+date: "2025-07-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r setup}
+library(sva)
+library(mgcv)
+library(nlme)
+library(genefilter)
+library(BiocParallel)
+library(DESeq2)
+library(edgeR)
+library(dearseq)
+library(SummarizedExperiment)
+library(dearseq)
+library(org.Hs.eg.db)
+library(MASS)
+library(tidyverse)
+library(caret)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(archetypes)
+library(modeltools)
+library(nnls)
+library(ggplot2)
+library(RColorBrewer)
+library(clusterProfiler)
+library(grid)
+library(pheatmap)
+library(ggplot2)
+library(archetypes)
+library(modeltools)
+library(nnls)
+library(vcd)
+library(ggpubr)
+library(ppcor)
+
+
+
+
+
+```
+
+
+```{r batch, echo=FALSE}
+
+colData_female=read.delim("colData_female.txt",h=T)
+
+countData_female=read.delim("countData_female.txt",h=T)
+rownames(countData_female)=countData_female[[1]]
+countData_female <- countData_female[, -1]
+
+saf_diagnose <- data.frame(saf_diagnose = colData_female$saf_diagnose, 
+                           row.names = colData_female$SeqID)
+
+#===================batch-correct based on seq_round=========================
+
+batches_female = sapply(as.character(colData_female$Seq_Round), switch, "B" = 2, "A" = 1, USE.NAMES = F)
+groups_female = sapply(as.character(colData_female$saf_diagnose), switch, "S1" = 1, "S2" = 2, "S3" = 3, USE.NAMES = F)
+corrected_data_females = ComBat_seq(counts = as.matrix(countData_female), batch = batches_female, group = groups_female)
+corrected_data_females_df=as.data.frame(corrected_data_females)
+
+#===================DESeq2 =========================
+
+dds_female <- DESeqDataSetFromMatrix(
+  countData = corrected_data_females_df,
+  colData = colData_female,
+  design = ~bmi_3e5d68 + alder + saf_diagnose
+)
+
+dds_female$saf_diagnose <- as.factor(colData_female$saf_diagnose)
+
+dds_female <- DESeq(dds_female)
+
+get_results_df <- function(dds_female, contrast, prefix) {
+  res <- results(dds_female, contrast = contrast, alpha = 0.05, independentFiltering = TRUE)
+  df <- as.data.frame(res)
+  df$RefSeq <- rownames(df)
+  names(df)[1:7] <- paste0(c("baseMean", "log2FC", "lfcSE", "stat_3h", "pvalue", "padj", "Symbol"), "_", prefix)
+  return(df)
+}
+
+SAF1_vs_SAF2 <- get_results_df(dds_female, c("saf_diagnose", "S2", "S1"), "SAF1_vs_SAF2")
+SAF1_vs_SAF3  <- get_results_df(dds_female, c("saf_diagnose", "S3", "S1"), "SAF1_vs_SAF3")
+SAF2_vs_SAF3    <- get_results_df(dds_female, c("saf_diagnose", "S3", "S2"), "SAF2_vs_SAF3")
+
+merge_cols <- c("log2FC", "padj", "Symbol")
+dfs <- list(SAF1_vs_SAF2, SAF1_vs_SAF3, SAF2_vs_SAF3)
+dfs_selected <- lapply(dfs, function(df) df[, grep(paste(merge_cols, collapse = "|"), names(df))])
+
+dfs_selected <- lapply(dfs, function(df) {
+  sym_col <- grep("^Symbol", names(df), value = TRUE)
+  names(df)[names(df) == sym_col] <- "Symbol"
+  df
+})
+
+All_diff_genes_females <- Reduce(function(x, y) merge(x, y, by = "Symbol"), dfs_selected)
+
+padj_cols <- grep("padj", names(All_diff_genes_females), value = TRUE)
+filter_mask <- rowSums(All_diff_genes_females[padj_cols] < 0.1, na.rm = TRUE) > 0
+All_diff_genes_0.1_females <- All_diff_genes_females[filter_mask, ]
+All_diff_genes_norm_select_0.1_females <- na.omit(All_diff_genes_0.1_females)
+rownames(All_diff_genes_norm_select_0.1_females) <- All_diff_genes_norm_select_0.1_females$Symbol
+###920 genes
+
+#===================EdgeR =========================
+
+# Prepare metadata and DGE list
+group_female <- colData_female$saf_diagnose
+BMI_female   <- colData_female$bmi_3e5d68
+Age_female   <- colData_female$alder
+
+dge_female <- DGEList(counts = corrected_data_females_df, group = group_female)
+keep_female <- filterByExpr(dge_female)
+dge_female <- dge_female[keep_female, , keep.lib.sizes = FALSE]
+
+# Normalization and design
+dge_female <- calcNormFactors(dge_female, method = "TMM")
+design_female <- model.matrix(~group_female + BMI_female + Age_female)
+dge_female <- estimateDisp(dge_female, design_female)
+
+# Calculate CPM (log-transf.)
+pseudo_TMM_female <- cpm(dge_female, log = TRUE)
+pseudo_TMM_female <- as.data.frame(pseudo_TMM_female)
+
+# Function to run DE analyses
+run_edgeR_test <- function(fit, coef_or_contrast, name, use_contrast = FALSE) {
+  if (use_contrast) {
+    qlf <- glmQLFTest(fit, contrast = coef_or_contrast)
+  } else {
+    qlf <- glmQLFTest(fit, coef = coef_or_contrast)
+  }
+  res <- topTags(qlf, n = Inf)$table
+  res$Symbol <- rownames(res)
+  colnames(res)[1:5] <- paste0(c("log2FC", "logCPM", "F", "pvalue", "padj"), "_", name)
+  return(res)
+}
+
+# Fit model and run tests
+fit_female <- glmQLFit(dge_female, design_female)
+
+res_2vs1 <- run_edgeR_test(fit_female, 2, "SAF1_vs_SAF2")
+res_3vs1 <- run_edgeR_test(fit_female, 3, "SAF1_vs_SAF3")
+res_3vs2 <- run_edgeR_test(fit_female, c(0, -1, 1, 0, 0), "SAF2_vs_SAF3", use_contrast = TRUE)
+
+# Merge results
+merge_cols <- c("log2FC", "padj", "Symbol")
+dfs <- list(res_2vs1, res_3vs1, res_3vs2)
+dfs_selected <- lapply(dfs, function(df) df[, grep(paste(merge_cols, collapse = "|"), names(df))])
+All_diff_genes_female_EdgeR <- Reduce(function(x, y) merge(x, y, by = "Symbol"), dfs_selected)
+rownames(All_diff_genes_female_EdgeR) <- All_diff_genes_female_EdgeR$Symbol
+
+# Merge with normalized count
+All_diff_genes_female_EdgeR_norm <- merge(All_diff_genes_female_EdgeR, pseudo_TMM_female, by.x = "Symbol", by.y = "row.names")
+
+# Filter with padj < 0.1 
+padj_cols <- grep("padj", names(All_diff_genes_female_EdgeR_norm), value = TRUE)
+filter_mask <- rowSums(All_diff_genes_female_EdgeR_norm[padj_cols] < 0.1, na.rm = TRUE) > 0
+All_diff_genes_female_EdgeR_norm_select_0.1 <- All_diff_genes_female_EdgeR_norm[filter_mask, ]
+All_diff_genes_female_EdgeR_norm_select_0.1 <- na.omit(All_diff_genes_female_EdgeR_norm_select_0.1)
+rownames(All_diff_genes_female_EdgeR_norm_select_0.1) <- All_diff_genes_female_EdgeR_norm_select_0.1$Symbol
+#622 genes
+
+#==============================dearseq to find diff genes in females======================
+
+# colData and countData
+col_data_female_dear <- data.frame(Diagnose = colData_female$saf_diagnose)
+rownames(col_data_female_dear) <- colData_female$SeqID
+
+countData_female_filter <- corrected_data_females_df[keep_female, ]
+
+# SummarizedExperiment-objekt
+se_female_raw <- SummarizedExperiment(
+  assays = as.matrix(countData_female_filter),
+  colData = col_data_female_dear
+)
+
+# Run dearseq
+run_dearseq <- function(se, exclude_group, contrast_name) {
+  se_sub <- se[, se$Diagnose != exclude_group]
+  res <- dear_seq(
+    object = se_sub,
+    variables2test = "Diagnose",
+    which_test = "asymptotic",
+    preprocessed = FALSE
+  )
+  df <- res$pvals
+  colnames(df)[1:2] <- paste0(c("pvalue", "padj"), "_", contrast_name)
+  return(df)
+}
+
+res_S2_S1 <- run_dearseq(se_female_raw, "S3", "SAF1_vs_SAF2")
+res_S3_S1 <- run_dearseq(se_female_raw, "S2", "SAF1_vs_SAF3")
+res_S3_S2 <- run_dearseq(se_female_raw, "S1", "SAF2_vs_SAF3")
+
+###select diff genes in at least one of the conditions
+All_diff_genes_female_Dear=as.data.frame(merge(res_S2_S1, res_S3_S1,by="row.names"))
+row.names(All_diff_genes_female_Dear)=All_diff_genes_female_Dear$Row.names
+All_diff_genes_female_Dear=as.data.frame(merge(All_diff_genes_female_Dear[2:5], res_S3_S2,by="row.names"))
+colnames(All_diff_genes_female_Dear)[1] <- "Symbol"
+rownames(All_diff_genes_female_Dear) <- All_diff_genes_female_Dear$Symbol
+
+# Filter with padj < 0.1 
+padj_cols <- grep("padj", names(All_diff_genes_female_Dear), value = TRUE)
+filter_mask <- rowSums(All_diff_genes_female_Dear[padj_cols] < 0.1, na.rm = TRUE) > 0
+All_diff_genes_female_Dear_0.1 <- All_diff_genes_female_Dear[filter_mask, ]
+All_diff_genes_female_Dear_0.1 <- na.omit(All_diff_genes_female_Dear_0.1)
+rownames(All_diff_genes_female_Dear_0.1) <- All_diff_genes_female_Dear_0.1$Symbol
+#822 genes
+
+#=================merge all diff genes - needs to be identified as a diff genes by all three methods ======================
+
+All_diff_genes_female_3M=merge(All_diff_genes_female_EdgeR_norm_select_0.1, All_diff_genes_female_Dear_0.1[1], by="Symbol")
+All_diff_genes_female_3M=merge(All_diff_genes_female_3M, All_diff_genes_norm_select_0.1_females[1], by="Symbol")
+#461 genes
+
+#============== k-means clustering on the differentially expressed genes (padj <0.1)
+
+Diff_genes_all_pseudo_TMM=read.delim("Diff_genes_all_pseudo_TMM.txt",h=T)
+
+breaksList = seq(-2, 2, by=0.02)
+cols <- colorRampPalette(brewer.pal(11, "RdBu"))(200)
+df1_female <- as.data.frame(colData(dds_female)[,c("saf_diagnose")])
+mycolor <- c("#00AFBB", "#E7B800", "#FC4E07")
+names(mycolor) <- c("S1", "S2", "S3")
+ann_colors <- list(saf_diagnose = mycolor)
+
+rownames(df1_female)=dds_female$SeqID
+
+set.seed(123)  # For reproducibility
+obj_3M_female= pheatmap(Diff_genes_all_pseudo_TMM, cluster_rows=TRUE, scale = "row", show_rownames=FALSE, breaks=breaksList, col=rev(cols),
+                 cluster_cols=TRUE, annotation_col=df1_female, clustering_method = "average", kmeans_k = 3)
+
+m_3M_female <- as.data.frame(obj_3M_female$kmeans$cluster)
+m_3M_female$Symbol=rownames(m_3M_female)
+names(m_3M_female)[1]="kmeans"
+
+# Swap cluster labels 1 and 2
+m_3M_female$kmeans <- ifelse(m_3M_female$kmeans == 1, 99, m_3M_female$kmeans)  # temporarily mark 1s as 99
+m_3M_female$kmeans <- ifelse(m_3M_female$kmeans == 2, 1, m_3M_female$kmeans)   # convert 2s to 1
+m_3M_female$kmeans <- ifelse(m_3M_female$kmeans == 99, 2, m_3M_female$kmeans)  # convert 99s (original 1s) to 2
+
+###merge with count table
+NASH_kmeans_female=merge(m_3M_female, pseudo_TMM_female, by="row.names")
+NASH_kmeans_order_female=NASH_kmeans_female[order(NASH_kmeans_female$kmeans, decreasing = FALSE),]
+rownames(NASH_kmeans_order_female)=NASH_kmeans_order_female$Symbol
+
+###arrange based only on SAF diagnose
+col.order_female=colData_female[order(colData_female$saf_diagnose, decreasing=FALSE),]
+col.order_female=t(col.order_female$SeqID)
+colnames(col.order_female)=col.order_female[1,]
+
+NASH_kmeans_order_order_female=NASH_kmeans_order_female[colnames(col.order_female)]
+
+```{r fig1C, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+pheatmap(as.matrix(NASH_kmeans_order_order_female), col=rev(cols), breaks = breaksList, scale="row", annotation_col=df1_female, annotation_colors = ann_colors, cluster_cols = FALSE, cluster_rows = FALSE, show_rownames = FALSE)
+```
+```{r batch, echo=FALSE}
+#============================GO analyses of Clusters==========================
+
+###select cluster genes
+Clust1_3_female=NASH_kmeans_order_female[which(NASH_kmeans_order_female[,c(2)] == "1"), ]
+Clust2_3_female=NASH_kmeans_order_female[which(NASH_kmeans_order_female[,c(2)] == "2"), ]
+Clust3_3_female=NASH_kmeans_order_female[which(NASH_kmeans_order_female[,c(2)] == "3"), ]
+
+ego_result_C1_3 <- enrichGO(gene    = as.vector(Clust1_3_female$Symbol),
+                            universe   = as.vector(rownames(pseudo_TMM_female)),
+                       OrgDb        = org.Hs.eg.db,
+                       keyType      = "SYMBOL",
+                       ont          = "BP",         # "BP" (Biological Process), "MF", or "CC"
+                       pAdjustMethod = "BH",
+                       pvalueCutoff  = 1,
+                       qvalueCutoff  = 1,
+                        minGSSize = 1,
+                       readable      = TRUE)        # Converts Entrez IDs back to gene symbols
+
+ego_result_C2_3 <- enrichGO(gene         = as.vector(Clust2_3_female$Symbol),
+                            universe      = as.vector(rownames(pseudo_TMM_female)),
+                            OrgDb        = org.Hs.eg.db,
+                            keyType      = "SYMBOL",
+                            ont          = "BP",         # "BP" (Biological Process), "MF", or "CC"
+                            pAdjustMethod = "BH",
+                            pvalueCutoff  = 1,
+                            qvalueCutoff  = 1,
+                            minGSSize = 1,
+                            readable      = TRUE)       
+
+ego_result_C3_3 <- enrichGO(gene         = as.vector(Clust3_3_female$Symbol),
+                            universe      = as.vector(rownames(pseudo_TMM_female)),
+                            OrgDb        = org.Hs.eg.db,
+                            keyType      = "SYMBOL",
+                            ont          = "BP",         # "BP" (Biological Process), "MF", or "CC"
+                            pAdjustMethod = "BH",
+                            pvalueCutoff  = 1,
+                            qvalueCutoff  = 1,  
+                            minGSSize = 1,
+                            readable      = TRUE)       
+
+# Convert enrichGO results to data frames
+df_C1 <- as.data.frame(ego_result_C1_3)[, c("Description", "p.adjust")]
+df_C2 <- as.data.frame(ego_result_C2_3)[, c("Description", "p.adjust")]
+df_C3 <- as.data.frame(ego_result_C3_3)[, c("Description", "p.adjust")]
+
+
+# Get top 5 terms from each cluster
+top5_C1 <- df_C1 %>% arrange(p.adjust) %>% slice_head(n = 5)
+top5_C2 <- df_C2 %>% arrange(p.adjust) %>% slice_head(n = 5)
+top5_C3 <- df_C3 %>% arrange(p.adjust) %>% slice_head(n = 5)
+
+#  Combine in desired order
+ordered_terms <- c(top5_C1$Description, top5_C2$Description, top5_C3$Description)
+
+# Merge all clusters by Description
+merged <- full_join(df_C1, df_C2, by = "Description") %>%
+  full_join(df_C3, by = "Description")
+
+colnames(merged) <- c("Description", "C1_3", "C2_3", "C3_3")
+
+# Compute -log10(p.adjust)
+log_padj <- merged %>%
+  mutate(across(starts_with("C"), ~ -log10(.), .names = "log_{.col}"))
+
+# Filter and order for heatmap
+heatmap_data <- log_padj %>%
+    dplyr::filter(Description %in% ordered_terms) %>%
+    dplyr::slice(match(ordered_terms, Description)) %>%
+    dplyr::select(Description, starts_with("log_")) %>%
+    tibble::column_to_rownames("Description") %>%
+    as.matrix()
+
+# Rename columns
+colnames(heatmap_data) <- gsub("log_", "", colnames(heatmap_data))
+
+# Define breaks from 0 to 10
+breaks_list <- seq(0, 5, length.out = 51)
+
+```{r fig1D, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+pheatmap(heatmap_data,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         color = colorRampPalette(c("white", "blue"))(100),
+         breaks = breaks_list,
+         na_col = "white",
+         border_color = "grey70",
+         main = "Top 5 GO Terms per Cluster")
+```
+
+```{r batch, echo=FALSE}
+
+#=========LDA on females on diff genes as well as on most variant genes==============
+
+#use TMM transformed data to perform analyses
+pseudo_TMM_female=read.delim("pseudo_TMM_female.txt",h=T)
+
+###use most variant genes
+####obtain PC values
+# calculate the variance for each gene
+rv_females <- rowVars(as.matrix(pseudo_TMM_female))
+select_females <- order(rv_females, decreasing=TRUE)[seq_len(min(500, length(rv_females)))]
+Variant_genes_females=as.data.frame(t(pseudo_TMM_female[select_females, ]))
+Variant_genes_females$SeqID=rownames(Variant_genes_females)
+
+#feed in the SAF diagnose
+Variant_genes_females=join(Variant_genes_females, colData_female[,c(1,3)], by="SeqID") 
+Variant_genes_females_2=Variant_genes_females[,c(1:500,502)]
+
+# Estimate preprocessing parameters
+preproc.parameter_female_var <- Variant_genes_females_2 %>% 
+  preProcess(method = c("center", "scale"))
+
+# Transform the data using the estimated parameters
+var.data.transform_female <- preproc.parameter_female_var %>% predict(Variant_genes_females_2)
+
+# Fit the model
+model_female_var <- lda(saf_diagnose~., data = var.data.transform_female)
+model_female_var
+
+# Make predictions
+predictions_female_var <- model_female_var %>% predict(var.data.transform_female)
+
+# model_female accuracy
+mean(predictions_female_var$class==var.data.transform_female$saf_diagnose)
+attributes(model_female_var)
+
+#modelprojections
+modelProjection_female_var <- cbind(scale(as.matrix(Variant_genes_females_2[,-501]),scale=FALSE) %*% model_female_var$scaling,Variant_genes_females_2[,501,drop=FALSE])#Depends on matrix size
+modelProjection_female_var$SeqID = colData_female$SeqID
+
+# Define your custom colors
+group_colors <- c(S1 = "#00AFBB", S2 = "#E7B800", S3 = "#FC4E07")
+
+```{r figS1A, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(modelProjection_female_var, aes(x = LD1, y = LD2, color = saf_diagnose)) +
+  geom_point(size = 3) +
+  stat_ellipse(geom = "polygon", aes(fill = saf_diagnose), alpha = 0.2, color = NA) +
+  scale_color_manual(values = group_colors) +
+  scale_fill_manual(values = group_colors) +
+  theme_minimal() +
+  labs(color = "saf_diagnose", fill = "saf_diagnose")
+```
+```{r batch, echo=FALSE}
+
+#========================Archetype analyses on females=========================================
+
+###AA on variant genes
+a_female_var<-modelProjection_female_var
+
+a_female_var[a_female_var=="S1"]=1
+a_female_var[a_female_var=="S2"]=2
+a_female_var[a_female_var=="S3"]=3
+
+LDA_female_var=a_female_var[c(1:2)]
+
+set.seed(1340)
+a_female_vars=stepArchetypes(LDA_female_var,k=1:10,verbose = F, nrep = 3)
+screeplot(a_female_vars)#Elbow
+a_female_var3=bestModel(a_female_vars[[3]])
+
+#plot archetype scores per SAF diagnose
+mycolor=c("#00AFBB", "#E7B800", "#FC4E07","")
+group_female=a_female_var[,"saf_diagnose"]
+color_female=mycolor[as.numeric(group_female)]
+
+
+```{r fig1E, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ternaryplot(a_female_var3[["alphas"]],col=color_female,labels = "outside",prop_size = F)
+```
+```{r batch, echo=FALSE}
+
+#Export the 'alphas' data 
+f_var_female=a_female_var$SeqID
+rownames(a_female_var3$alphas)=f_var_female
+g_var_female=merge(a_female_var3$alphas,saf_diagnose,by="row.names")
+
+###select top 8 diff genes
+g_var_female_S1=g_var_female[g_var_female$V3 > 0.71,]
+g_var_female_S2=g_var_female[g_var_female$V1 > 0.67,]
+g_var_female_S2=g_var_female_S2[g_var_female_S2$saf_diagnose =="S2",]
+g_var_female_S3=g_var_female[g_var_female$V2 > 0.83,]
+
+
+g_var_female_all=rbind(g_var_female_S1, g_var_female_S2)
+g_var_female_all=rbind(g_var_female_all, g_var_female_S3)
+names(g_var_female_all)[1]="SeqID"
+rownames(g_var_female_all)=g_var_female_all$SeqID
+
+
+### plot archetype scores within each SAF category
+
+#Reshape the data
+g_long <- g_var_female_all %>%
+  dplyr::select(SeqID, saf_diagnose, V1, V2, V3) %>%
+  pivot_longer(cols = starts_with("V"), names_to = "Variable", values_to = "Value") %>%
+  mutate(Variable = recode(Variable,
+                           V3 = "SAF1 AA",
+                           V1 = "SAF2 AA",
+                           V2 = "SAF3 AA"))
+
+#Assign the ordering variable based on saf_diagnose
+g_var_female_all <- g_var_female_all %>%
+  mutate(order_val = case_when(
+    saf_diagnose == "S1" ~ V3,
+    saf_diagnose == "S2" ~ V1,
+    saf_diagnose == "S3" ~ V2
+  ))
+
+# Get ordered SeqID within each saf_diagnose
+ordering <- g_var_female_all %>%
+  arrange(saf_diagnose, desc(order_val)) %>%
+  pull(SeqID)
+
+# Apply ordered factor to the long table
+g_long$SeqID <- factor(g_long$SeqID, levels = ordering)
+
+```{r fig1D, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+
+ggplot(g_long, aes(x = SeqID, y = Value, fill = Variable)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  scale_fill_manual(values = c("SAF1 AA" = "#00AFBB", "SAF2 AA" = "#E7B800", "SAF3 AA" = "#FC4E07")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 6),
+        strip.text = element_text(face = "bold")) +
+  labs(x = "Sample (SeqID)", y = "Archetype Score", fill = "SAF Axis")
+```
+
+```{r batch, echo=FALSE}
+#=================Run diff gene analyses on these 3x8 archetype femaless ======================
+
+colData_female_arc=merge(colData_female, g_var_female_all[1], by="SeqID")
+colData_female_arc=arrange(colData_female_arc, SeqID)
+rownames(colData_female_arc)=colData_female_arc$SeqID
+
+###subset countTable only included ID's
+countData_female_arc=countData_female[colnames(countData_female) %in% rownames(colData_female_arc)]
+colData_female_arc <- colData_female_arc[colnames(countData_female_arc), ]
+
+###seq_round correction
+batches_female_arc = sapply(as.character(colData_female_arc$Seq_Round), switch, "B" = 2, "A" = 1, USE.NAMES = F)
+groups_female_arc = sapply(as.character(colData_female_arc$saf_diagnose), switch, "S1" = 1, "S2" = 2, "S3" = 3, USE.NAMES = F)
+corrected_data_female_arc = ComBat_seq(counts = as.matrix(countData_female_arc), batch = batches_female_arc, group = groups_female_arc)
+corrected_data_female_arc_df=as.data.frame(corrected_data_female_arc)
+
+###Run diff gene analyses on these 8 females
+
+dds_female_arc <- DESeqDataSetFromMatrix(
+  countData = corrected_data_female_arc_df,
+  colData = colData_female_arc,
+  design = ~bmi_3e5d68 + alder + saf_diagnose
+)
+
+dds_female_arc$saf_diagnose=as.factor(colData_female_arc$saf_diagnose)
+
+#run DESeq2 on the different comparison 
+dds_female_arc <- DESeq(dds_female_arc)
+
+get_results_df_arc <- function(dds_female_arc, contrast, prefix) {
+  res <- results(dds_female_arc, contrast = contrast, alpha = 0.05, independentFiltering = TRUE)
+  df <- as.data.frame(res)
+  df$RefSeq <- rownames(df)
+  names(df)[1:7] <- paste0(c("baseMean", "log2FC", "lfcSE", "stat_3h", "pvalue", "padj", "Symbol"), "_", prefix)
+  return(df)
+}
+
+SAF1_vs_SAF2_arc <- get_results_df_arc(dds_female_arc, c("saf_diagnose", "S2", "S1"), "SAF1_vs_SAF2")
+SAF1_vs_SAF3_arc  <- get_results_df_arc(dds_female_arc, c("saf_diagnose", "S3", "S1"), "SAF1_vs_SAF3")
+SAF2_vs_SAF3_arc    <- get_results_df_arc(dds_female_arc, c("saf_diagnose", "S3", "S2"), "SAF2_vs_SAF3")
+
+merge_cols <- c("log2FC", "padj", "Symbol")
+dfs_arc <- list(SAF1_vs_SAF2_arc, SAF1_vs_SAF3_arc, SAF2_vs_SAF3_arc)
+dfs_selected_arc <- lapply(dfs_arc, function(df) df[, grep(paste(merge_cols, collapse = "|"), names(df))])
+
+dfs_selected_arc <- lapply(dfs_arc, function(df) {
+  sym_col <- grep("^Symbol", names(df), value = TRUE)
+  names(df)[names(df) == sym_col] <- "Symbol"
+  df
+})
+
+All_diff_genes_females_arc <- Reduce(function(x, y) merge(x, y, by = "Symbol"), dfs_selected_arc)
+
+padj_cols <- grep("padj", names(All_diff_genes_females_arc), value = TRUE)
+filter_mask <- rowSums(All_diff_genes_females_arc[padj_cols] < 0.1, na.rm = TRUE) > 0
+All_diff_genes_0.1_females_arc <- All_diff_genes_females_arc[filter_mask, ]
+All_diff_genes_0.1_females_arc <- na.omit(All_diff_genes_0.1_females_arc)
+rownames(All_diff_genes_0.1_females_arc) <- All_diff_genes_0.1_females_arc$Symbol
+###1769 genes
+
+#================== EdgeR normalization and diff gene expression
+
+# Prepare metadata and DGE list
+group_female_arc <- colData_female_arc$saf_diagnose
+BMI_female_arc <- colData_female_arc$bmi_3e5d68
+Age_female_arc <- colData_female_arc$alder
+
+dge_female_arc <- DGEList(counts=corrected_data_female_arc_df,group=group_female_arc) 
+keep_female_arc <- filterByExpr(dge_female_arc)
+dge_female_arc <- dge_female_arc[keep_female_arc,,keep.lib.sizes=FALSE]
+
+# Normalization and design
+dge_female_arc <- calcNormFactors(dge_female_arc, method="TMM") 
+design_female_arc <- model.matrix(~group_female_arc + BMI_female_arc + Age_female_arc)
+dge_female_arc <- estimateDisp(dge_female_arc,design_female_arc) 
+
+# Calculate CPM (log-transf.)
+pseudo_TMM_female_arc <- cpm(dge_female_arc, log=TRUE) 
+pseudo_TMM_female_arc=as.data.frame(pseudo_TMM_female_arc)
+
+# Function to run DE analyses
+run_edgeR_test <- function(fit, coef_or_contrast, name, use_contrast = FALSE) {
+  if (use_contrast) {
+    qlf <- glmQLFTest(fit, contrast = coef_or_contrast)
+  } else {
+    qlf <- glmQLFTest(fit, coef = coef_or_contrast)
+  }
+  res <- topTags(qlf, n = Inf)$table
+  res$Symbol <- rownames(res)
+  colnames(res)[1:5] <- paste0(c("log2FC", "logCPM", "F", "pvalue", "padj"), "_", name)
+  return(res)
+}
+
+# Fit model and run tests
+fit_female_arc <- glmQLFit(dge_female_arc, design_female_arc)
+
+res_2vs1_arc <- run_edgeR_test(fit_female_arc, 2, "SAF1_vs_SAF2")
+res_3vs1_arc <- run_edgeR_test(fit_female_arc, 3, "SAF1_vs_SAF3")
+res_3vs2_arc <- run_edgeR_test(fit_female_arc, c(0, -1, 1, 0, 0), "SAF2_vs_SAF3", use_contrast = TRUE)
+
+# Merge results
+merge_cols <- c("log2FC", "padj", "Symbol")
+dfs_arc <- list(res_2vs1_arc, res_3vs1_arc, res_3vs2_arc)
+dfs_selected_arc <- lapply(dfs_arc, function(df) df[, grep(paste(merge_cols, collapse = "|"), names(df))])
+All_diff_genes_female_EdgeR_arc <- Reduce(function(x, y) merge(x, y, by = "Symbol"), dfs_selected_arc)
+rownames(All_diff_genes_female_EdgeR_arc) <- All_diff_genes_female_EdgeR_arc$Symbol
+
+# Merge with normalized count
+All_diff_genes_female_EdgeR_arc <- merge(All_diff_genes_female_EdgeR_arc, pseudo_TMM_female, by.x = "Symbol", by.y = "row.names")
+
+# Filter with padj < 0.1 
+padj_cols_arc <- grep("padj", names(All_diff_genes_female_EdgeR_arc), value = TRUE)
+filter_mask_arc <- rowSums(All_diff_genes_female_EdgeR_arc[padj_cols_arc] < 0.1, na.rm = TRUE) > 0
+All_diff_genes_female_EdgeR_norm_select_0.1_arc <- All_diff_genes_female_EdgeR_arc[filter_mask_arc, ]
+All_diff_genes_female_EdgeR_norm_select_0.1_arc <- na.omit(All_diff_genes_female_EdgeR_norm_select_0.1_arc)
+rownames(All_diff_genes_female_EdgeR_norm_select_0.1_arc) <- All_diff_genes_female_EdgeR_norm_select_0.1_arc$Symbol
+#1237 genes
+
+#==============================dearseq to find diff genes in archetype females======================
+
+col_data_female_dear_arc <- data.frame(Diagnose = colData_female_arc$saf_diagnose)
+rownames(col_data_female_dear_arc)=col_data_female_dear_arc$SeqID
+
+countData_female_arc_filter <- corrected_data_female_arc_df[keep_female_arc,]
+
+# SummarizedExperiment-objekt
+se_female_raw_arc <- SummarizedExperiment(
+  assays = as.matrix(countData_female_arc_filter),
+  colData = col_data_female_dear_arc
+)
+
+# Run dearseq
+run_dearseq <- function(se, exclude_group, contrast_name) {
+  se_sub <- se[, se$Diagnose != exclude_group]
+  res <- dear_seq(
+    object = se_sub,
+    variables2test = "Diagnose",
+    which_test = "asymptotic",
+    preprocessed = FALSE
+  )
+  df <- res$pvals
+  colnames(df)[1:2] <- paste0(c("pvalue", "padj"), "_", contrast_name)
+  return(df)
+}
+
+res_S2_S1_arc <- run_dearseq(se_female_raw_arc, "S3", "SAF1_vs_SAF2")
+res_S3_S1_arc <- run_dearseq(se_female_raw_arc, "S2", "SAF1_vs_SAF3")
+res_S3_S2_arc <- run_dearseq(se_female_raw_arc, "S1", "SAF2_vs_SAF3")
+
+###select diff genes in at least one of the conditions
+All_diff_genes_female_Dear_arc=as.data.frame(merge(res_S2_S1_arc, res_S3_S1_arc,by="row.names"))
+row.names(All_diff_genes_female_Dear_arc)=All_diff_genes_female_Dear_arc$Row.names
+All_diff_genes_female_Dear_arc=as.data.frame(merge(All_diff_genes_female_Dear_arc[2:5], res_S3_S2_arc,by="row.names"))
+colnames(All_diff_genes_female_Dear_arc)[1] <- "Symbol"
+rownames(All_diff_genes_female_Dear_arc) <- All_diff_genes_female_Dear_arc$Symbol
+
+# Filter with padj < 0.1 
+padj_cols_arc <- grep("padj", names(All_diff_genes_female_Dear_arc), value = TRUE)
+filter_mask_arc <- rowSums(All_diff_genes_female_Dear_arc[padj_cols_arc] < 0.1, na.rm = TRUE) > 0
+All_diff_genes_female_Dear_0.1_arc <- All_diff_genes_female_Dear[filter_mask_arc, ]
+All_diff_genes_female_Dear_0.1_arc <- na.omit(All_diff_genes_female_Dear_0.1_arc)
+rownames(All_diff_genes_female_Dear_0.1_arc) <- All_diff_genes_female_Dear_0.1_arc$Symbol
+#2358 genes
+
+#=======correlate log2FC for differentially expressed genes in archetypes and all females
+
+# Diff genes in archetype females
+Diff_Arc_Genes = read.delim("Diff_Arc_Genes.txt",h=T)
+
+Diff_Arc_Genes_up=Diff_Arc_Genes[Diff_Arc_Genes$log2FC_SAF1_SAF3.arc > 0 & Diff_Arc_Genes$padj_SAF1_SAF3.arc<0.1,]
+Diff_Arc_Genes_down=Diff_Arc_Genes[Diff_Arc_Genes$log2FC_SAF1_SAF3.arc < 0 & Diff_Arc_Genes$padj_SAF1_SAF3.arc<0.1,]
+
+####plot Figure S1E
+plot(Diff_Arc_Genes$log2FC_SAF1_SAF3.arc, Diff_Arc_Genes$log2FC_SAF1_SAF3.all, pch=20, col="white")
+points(Diff_Arc_Genes_up$log2FC_SAF1_SAF3.arc, Diff_Arc_Genes_up$log2FC_SAF1_SAF3.all, col = rgb(1, 0, 0, alpha = 0.25), cex = 0.35, pch = 20)
+points(Diff_Arc_Genes_down$log2FC_SAF1_SAF3.arc, Diff_Arc_Genes_down$log2FC_SAF1_SAF3.all, col = rgb(0, 0, 1, alpha = 0.25), cex = 0.35, pch = 20)
+abline(lm(Diff_Arc_Genes$log2FC_SAF1_SAF3.all ~ Diff_Arc_Genes$log2FC_SAF1_SAF3.arc), col = "green", lwd = 2)
+text(paste("Correlation:", round(cor(Diff_Arc_Genes$log2FC_SAF1_SAF3.arc,Diff_Arc_Genes$log2FC_SAF1_SAF3.all), 2)), x = -2, y = 2)
+abline(h=0) 
+abline(v=0) 
+
+cor.test(Diff_Arc_Genes$log2FC_SAF1_SAF3.arc, Diff_Arc_Genes$log2FC_SAF1_SAF3.all, method="pearson")
+
+# Diff genes in all females
+Diff_All_Genes = read.delim("Diff_All_Genes.txt",h=T)
+
+Diff_All_Genes_up=Diff_All_Genes[Diff_All_Genes$log2FC_SAF1_SAF3.all>0 & Diff_All_Genes$padj_SAF1_SAF3.all<0.1,]
+Diff_All_Genes_down=Diff_All_Genes[Diff_All_Genes$log2FC_SAF1_SAF3.all<0 & Diff_All_Genes$padj_SAF1_SAF3.all<0.1,]
+
+####plot Figure S1F
+plot(Diff_All_Genes$log2FC_SAF1_SAF3.arc, Diff_All_Genes$log2FC_SAF1_SAF3.all, pch=20, col="white")
+points(Diff_All_Genes_up$log2FC_SAF1_SAF3.arc, Diff_All_Genes_up$log2FC_SAF1_SAF3.all, col = rgb(1, 0, 0, alpha = 0.25), cex = 0.35, pch = 20)
+points(Diff_All_Genes_down$log2FC_SAF1_SAF3.arc, Diff_All_Genes_down$log2FC_SAF1_SAF3.all, col = rgb(0, 0, 1, alpha = 0.25), cex = 0.35, pch = 20)
+abline(lm(Diff_All_Genes$log2FC_SAF1_SAF3.all ~ Diff_All_Genes$log2FC_SAF1_SAF3.arc), col = "green", lwd = 2)
+text(paste("Correlation:", round(cor(Diff_All_Genes$log2FC_SAF1_SAF3.arc,Diff_All_Genes$log2FC_SAF1_SAF3.all), 2)), x = -2, y = 2)
+abline(h=0) 
+abline(v=0) 
+cor.test(Diff_All_Genes$log2FC_SAF1_SAF3.arc,Diff_All_Genes$log2FC_SAF1_SAF3.all, method="pearson")
+
+```{r batch, echo=FALSE}
+
+####plot clinical parameters for all females and archetypes
+
+diagnosis_colors <- c("#00AFBB", "#E7B800", "#FC4E07","#00AFBB", "#E7B800", "#FC4E07")
+
+###load meta-data file
+
+metadata_female=read.delim("metadata_female.txt",h=T)
+metadata_female$SeqID = rownames(metadata_female)
+
+# Merge using match to preserve order
+metadata_female_arc <- metadata_female[match(rownames(colData_female_arc), metadata_female$SeqID), ]
+
+# Combine the datasets and create a new factor variable
+combined_data <- rbind(transform(metadata_female_arc, dataset = "Arc"),
+                       transform(metadata_female, dataset = "All"))
+
+# Create a factor variable that combines diagnosis and dataset
+combined_data$saf_diagnose_combined <- factor(paste(combined_data$saf_diagnose, combined_data$dataset), 
+                                              levels = unique(paste(combined_data$saf_diagnose, combined_data$dataset)))
+
+# Specify the order of factor levels in reverse
+diag_levels <- unique(combined_data$saf_diagnose_combined)
+diag_levels <- rev(diag_levels)
+
+# Update the order of the factor levels
+combined_data$saf_diagnose_combined <- factor(combined_data$saf_diagnose_combined, levels = diag_levels)
+
+#BMI
+```{r figS1C, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(combined_data, aes(x = saf_diagnose_combined, y = bmi_3e5d68, fill = saf_diagnose_combined)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.2, color = "grey50", size = 1, alpha = 0.6) +
+  scale_fill_manual(values = diagnosis_colors) +
+  labs(title = "BMI Grouped by Diagnosis", x = "Diagnosis", y = "BMI") +
+  theme_minimal() +
+  theme(
+    axis.line = element_line(color = "black", linewidth = 0.5),
+    panel.grid = element_blank()  # optional: removes background grid
+  )
+```
+
+```{r batch, echo=FALSE}
+#age
+```{r figS1D, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(combined_data, aes(x = saf_diagnose_combined, y = alder, fill = saf_diagnose_combined)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.2, color = "grey50", size = 1, alpha = 0.6) +
+  scale_fill_manual(values = diagnosis_colors) +
+  labs(title = "Age Grouped by Diagnosis", x = "Diagnosis", y = "Age") +
+  theme_minimal() +
+  theme(
+    axis.line = element_line(color = "black", linewidth = 0.5),
+    panel.grid = element_blank()  # optional: removes background grid
+  )
+```
+
+```{r batch, echo=FALSE}
+#% liver fat - masked due to GDPR
+```{r fig1F, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(combined_data, aes(x = saf_diagnose_combined, y = liverfat_pct, fill = saf_diagnose_combined)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_fill_manual(values = diagnosis_colors) +
+  labs(title = "Liver Fat Grouped by Diagnosis", x = "Diagnosis", y = "Liver Fat %") +
+  theme_minimal() +
+  theme(
+    axis.line = element_line(color = "black", linewidth = 0.5),
+    panel.grid = element_blank()  # optional: removes background grid
+  )
+```
+
+```{r batch, echo=FALSE}
+#fibrosis (fibroscan) - masked due to GDPR
+```{r fig1G, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(combined_data, aes(x = saf_diagnose_combined, y = te_v2, fill = saf_diagnose_combined)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_fill_manual(values = diagnosis_colors) +
+  labs(title = "Fibrosis Grouped by Diagnosis", x = "Diagnosis", y = "Median (kPa)") +
+  theme_minimal() +
+  theme(
+    axis.line = element_line(color = "black", linewidth = 0.5),
+    panel.grid = element_blank()  # optional: removes background grid
+  )
+```
+
+```{r batch, echo=FALSE}
+### now plot genes
+###plot gene examples in all and archetype females
+norm_counts_female=as.data.frame(counts(dds_female, normalized=TRUE))
+norm_counts_female_diff=as.data.frame(counts(dds_female_arc, normalized=TRUE))
+
+###females
+Plot_gene_counts_female=t(norm_counts_female)
+Plot_gene_counts_female=cbind(Plot_gene_counts_female,colData_female[c(3)])
+
+#archetype females
+Plot_gene_counts_Arc_Fem=t(norm_counts_female_diff)
+Plot_gene_counts_Arc_Fem=cbind(Plot_gene_counts_Arc_Fem,colData_female_arc[c(3)])
+
+combined_data_genes <- rbind(transform(Plot_gene_counts_Arc_Fem, dataset = "Arc"),
+                       transform(Plot_gene_counts_female, dataset = "All"))
+
+
+# Create a factor variable that combines diagnosis and dataset
+combined_data_genes$saf_diagnose_combined <- factor(paste(combined_data_genes$saf_diagnose, combined_data_genes$dataset), 
+                                              levels = unique(paste(combined_data_genes$saf_diagnose, combined_data_genes$dataset)))
+
+# Specify the order of factor levels in reverse
+diag_levels <- unique(combined_data_genes$saf_diagnose_combined)
+diag_levels <- rev(diag_levels)
+
+# Update the order of the factor levels
+combined_data_genes$saf_diagnose_combined <- factor(combined_data_genes$saf_diagnose_combined, levels = diag_levels)
+
+#plot genes
+gene <- "HADH"
+
+
+```{r fig1H-A, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(combined_data_genes, aes(x = as.factor(saf_diagnose_combined), y = combined_data_genes[[gene]], fill = as.factor(saf_diagnose_combined))) +
+    geom_boxplot(outlier.shape = NA, color = "black") +  # Black outline and median line
+    geom_jitter(width = 0.2, color = "grey50", size = 1, alpha = 0.6) +
+    scale_fill_manual(values = diagnosis_colors) +
+    labs(title = paste(gene, " by Diagnosis"), x = "Diagnosis", y = gene) +
+    theme_minimal() +
+    theme(
+      axis.line = element_line(color = "black", linewidth = 0.5),
+      panel.grid = element_blank()
+    )
+```
+```{r batch, echo=FALSE}
+#IL2RG
+gene <- "IL2RG"
+
+```{r fig1H-B, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(combined_data_genes, aes(x = as.factor(saf_diagnose_combined), y = combined_data_genes[[gene]], fill = as.factor(saf_diagnose_combined))) +
+    geom_boxplot(outlier.shape = NA, color = "black") +  # Black outline and median line
+    geom_jitter(width = 0.2, color = "grey50", size = 1, alpha = 0.6) +
+    scale_fill_manual(values = diagnosis_colors) +
+    labs(title = paste(gene, " by Diagnosis"), x = "Diagnosis", y = gene) +
+    theme_minimal() +
+    theme(
+      axis.line = element_line(color = "black", linewidth = 0.5),
+      panel.grid = element_blank()
+    )
+```
+```{r batch, echo=FALSE}
+
+#COL5A2
+gene <- "COL5A2"
+
+```{r fig1H-C, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(combined_data_genes, aes(x = as.factor(saf_diagnose_combined), y = combined_data_genes[[gene]], fill = as.factor(saf_diagnose_combined))) +
+    geom_boxplot(outlier.shape = NA, color = "black") +  # Black outline and median line
+    geom_jitter(width = 0.2, color = "grey50", size = 1, alpha = 0.6) +
+    scale_fill_manual(values = diagnosis_colors) +
+    labs(title = paste(gene, " by Diagnosis"), x = "Diagnosis", y = gene) +
+    theme_minimal() +
+    theme(
+      axis.line = element_line(color = "black", linewidth = 0.5),
+      panel.grid = element_blank()
+    )
+```
+```{r batch, echo=FALSE}
+
+### Plot marker genes of different subpopulations in females 
+
+#MMP9
+gene <- "MMP9"
+
+```{r figS3E-A, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(Plot_gene_counts_female, aes(x = as.factor(saf_diagnose), y = Plot_gene_counts_female[[gene]], fill = as.factor(saf_diagnose))) +
+    geom_boxplot(outlier.shape = NA, color = "black") +  # Black outline and median line
+    geom_jitter(width = 0.2, color = "grey50", size = 1, alpha = 0.6) +
+    scale_fill_manual(values = diagnosis_colors) +
+    labs(title = paste(gene, " by Diagnosis"), x = "Diagnosis", y = gene) +
+    theme_minimal() +
+    theme(
+      axis.line = element_line(color = "black", linewidth = 0.5),
+      panel.grid = element_blank()
+    )
+```
+
+```{r batch, echo=FALSE}
+
+#TREM2
+gene <- "TREM2"
+
+```{r figS3E-B, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(Plot_gene_counts_female, aes(x = as.factor(saf_diagnose), y = Plot_gene_counts_female[[gene]], fill = as.factor(saf_diagnose))) +
+    geom_boxplot(outlier.shape = NA, color = "black") +  # Black outline and median line
+    geom_jitter(width = 0.2, color = "grey50", size = 1, alpha = 0.6) +
+    coord_cartesian(ylim = c(0, 1000)) +
+    scale_fill_manual(values = diagnosis_colors) +
+    labs(title = paste(gene, " by Diagnosis"), x = "Diagnosis", y = gene) +
+    theme_minimal() +
+    theme(
+      axis.line = element_line(color = "black", linewidth = 0.5),
+      panel.grid = element_blank()
+    )
+```
+```{r batch, echo=FALSE}
+
+#PLAU
+gene <- "PLAU"
+
+
+```{r fig4E-A, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(Plot_gene_counts_female, aes(x = as.factor(saf_diagnose), y = Plot_gene_counts_female[[gene]], fill = as.factor(saf_diagnose))) +
+    geom_boxplot(outlier.shape = NA, color = "black") +  # Black outline and median line
+    geom_jitter(width = 0.2, color = "grey50", size = 1, alpha = 0.6) +
+    scale_fill_manual(values = diagnosis_colors) +
+    labs(title = paste(gene, " by Diagnosis"), x = "Diagnosis", y = gene) +
+    theme_minimal() +
+    theme(
+      axis.line = element_line(color = "black", linewidth = 0.5),
+      panel.grid = element_blank()
+    )
+```
+```{r batch, echo=FALSE}
+#IRF1
+gene <- "IRF1"
+
+
+```{r fig4E-B, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(Plot_gene_counts_female, aes(x = as.factor(saf_diagnose), y = Plot_gene_counts_female[[gene]], fill = as.factor(saf_diagnose))) +
+    geom_boxplot(outlier.shape = NA, color = "black") +  # Black outline and median line
+    geom_jitter(width = 0.2, color = "grey50", size = 1, alpha = 0.6) +
+    scale_fill_manual(values = diagnosis_colors) +
+    labs(title = paste(gene, " by Diagnosis"), x = "Diagnosis", y = gene) +
+    theme_minimal() +
+    theme(
+      axis.line = element_line(color = "black", linewidth = 0.5),
+      panel.grid = element_blank()
+    )
+```
+```{r batch, echo=FALSE}
+#AZGP1
+gene <- "AZGP1"
+
+
+```{r fig5F-A, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(Plot_gene_counts_female, aes(x = as.factor(saf_diagnose), y = Plot_gene_counts_female[[gene]], fill = as.factor(saf_diagnose))) +
+    geom_boxplot(outlier.shape = NA, color = "black") +  # Black outline and median line
+    geom_jitter(width = 0.2, color = "grey50", size = 1, alpha = 0.6) +
+    coord_cartesian(ylim = c(0, 1500)) +
+    scale_fill_manual(values = diagnosis_colors) +
+    labs(title = paste(gene, " by Diagnosis"), x = "Diagnosis", y = gene) +
+    theme_minimal() +
+    theme(
+      axis.line = element_line(color = "black", linewidth = 0.5),
+      panel.grid = element_blank()
+    )
+```
+```{r batch, echo=FALSE}
+#ACVR1C
+gene <- "ACVR1C"
+
+```{r fig5F-A, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+ggplot(Plot_gene_counts_female, aes(x = as.factor(saf_diagnose), y = Plot_gene_counts_female[[gene]], fill = as.factor(saf_diagnose))) +
+    geom_boxplot(outlier.shape = NA, color = "black") +  # Black outline and median line
+    geom_jitter(width = 0.2, color = "grey50", size = 1, alpha = 0.6) +
+    scale_fill_manual(values = diagnosis_colors) +
+    labs(title = paste(gene, " by Diagnosis"), x = "Diagnosis", y = gene) +
+    theme_minimal() +
+    theme(
+      axis.line = element_line(color = "black", linewidth = 0.5),
+      panel.grid = element_blank()
+    )
+```
+
+```{r batch, echo=FALSE}
+
+###================correlation between ADH1BHI marker genes and clinical parameters======================
+
+###healthy_adipocyte_markers
+healthy_adipocyte_genes <- c(
+  "ADH1B", "LRP1B", "CECR2", "RORB", "CIDEA", "PFKFB3", "C6",
+  "TMEM132C", "FAM13A", "ENOX1", "LINC02649", "HPSE2", "SYT17", "ACVR1C",
+  "PLIN5", "GSDMB", "FMO2", "AZGP1", "PHLPP1", "PRKCQ", "EYA1",
+  "LRIG1", "MOCS1", "AASS", "ALPK3", "AC104596.1", "ALDH6A1", "FHOD3",
+  "IRAK2", "LINC02614", "LINC01230", "STPG2", "NIPSNAP3B", "GLIS1", "PWRN1",
+  "BTBD11", "KLF15"
+)
+
+###variance stabilize own expression data 
+vsd_female <- vst(dds_female, blind=FALSE)
+vsd_female_cor <- assay(vsd_female) #Extract counts 
+vsd_female_cor <- as.data.frame(t(vsd_female_cor))
+
+
+###subset clinical data to plot - whr, homa-ir, and liver fat masked due to GDPR
+subset_df <- metadata_female[, c("bmi_3e5d68", "whr", "homa_ir", "liverfat_pct")]
+
+subset_df <- as.data.frame(lapply(subset_df, function(x) as.numeric(as.character(x))))  # ensure numeric
+rownames(subset_df)=rownames(metadata_female)
+
+# Subset gene expression and log2-transform
+gene_expr_log <- vsd_female_cor[, colnames(vsd_female_cor) %in% healthy_adipocyte_genes]
+
+###correct for BMI using partial Spearman correlations
+vars_to_test <- c("whr", "homa_ir", "liverfat_pct")
+
+# Initialize matrices
+genes <- healthy_adipocyte_genes
+cors <- matrix(NA, nrow = length(genes), ncol = length(vars_to_test),
+               dimnames = list(genes, vars_to_test))
+pvals <- cors
+
+# Make sure samples overlap
+common_samples <- intersect(rownames(gene_expr_log), rownames(subset_df))
+
+# Subset both to the common samples and order the same way
+gene_expr_log_sub <- gene_expr_log[common_samples, , drop = FALSE]
+subset_df_sub <- subset_df[common_samples, , drop = FALSE]
+
+# Filter genes to only those present in data
+genes <- genes[genes %in% colnames(gene_expr_log_sub)]
+
+for (gene in genes) {
+  for (var in vars_to_test) {
+    if (!(var %in% colnames(subset_df_sub))) {
+      message("Variable not found: ", var)
+      next
+    }
+    
+    df <- data.frame(
+      expr = gene_expr_log_sub[[gene]],
+      var = subset_df_sub[[var]],
+      bmi = subset_df_sub[["bmi_3e5d68"]]
+    )
+    
+    df <- na.omit(df)
+    
+    if(nrow(df) > 3) {
+      pc <- pcor.test(df$expr, df$var, df$bmi, method = "spearman")
+      cors[gene, var] <- pc$estimate
+      pvals[gene, var] <- pc$p.value
+    }
+  }
+}
+
+# Flatten pvals, adjust and reshape
+pvals_vec <- as.vector(pvals)
+pvals_adj_vec <- p.adjust(pvals_vec, method = "BH")
+pvals_adj <- matrix(pvals_adj_vec, nrow = nrow(pvals), ncol = ncol(pvals),
+                    dimnames = dimnames(pvals))
+
+cors_clean <- cors
+cors_clean[!is.finite(cors_clean)] <- 0  # replace NA/NaN/Inf with 0
+
+
+###import arner 2018 data from Adiposetissue.org
+
+# Load CSV from your working directory
+clinical_data <- read.csv("Clinical_association.csv"   , stringsAsFactors = FALSE)
+rownames(clinical_data) = clinical_data$X
+
+# Specify the order of traits
+traits <- c("WHR", "HOMA", "TG", "Chol", "HDL", "cell_vol", "LEP_protein",  
+             "basal_TG", "iso_TG", "iso_basal")
+
+# Extract .r values in the desired order
+r_cols <- paste0(traits, ".r")
+r_mat <- as.matrix(clinical_data[, r_cols])
+
+common_genes_arner <- intersect(rownames(r_mat), rownames(cors_clean))
+combined_mat <- cbind(r_mat[common_genes_arner, ], cors_clean[common_genes_arner, ])
+
+# Extract .p values in the same order
+p_cols <- paste0(traits, ".p")
+p_mat <- as.matrix(clinical_data[, p_cols])
+
+combined_p_mat <- cbind(p_mat[common_genes_arner, ], pvals_adj[common_genes_arner, ])
+
+
+# Create a matrix of stars from p-values
+p_stars <- ifelse(combined_p_mat < 0.0001, "****",
+                  ifelse(combined_p_mat < 0.001, "***",
+                         ifelse(combined_p_mat < 0.01, "**",
+                                ifelse(combined_p_mat < 0.05, "*",
+                                       ifelse(combined_p_mat < 0.1, "§", "")))))
+
+p_stars_rearranged = p_stars[,c(1,11,2,12,13,3:10)]
+
+# Choose color palette centered on 0
+breaks <- seq(-1, 1, length.out = 101)
+
+# Plot heatmap with stars
+```{r fig5J, echo=TRUE, fig.show='hold', fig.width=6, fig.height=6}
+pheatmap(combined_mat[,c(1,11,2,12,13,3:10)],
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         display_numbers = p_stars_rearranged,
+         number_color = "black",
+         breaks = breaks,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         main = "Correlation Heatmap with Significance Stars")
+```
+
