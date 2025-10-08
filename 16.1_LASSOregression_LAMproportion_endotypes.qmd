@@ -23,7 +23,6 @@ library(tidyverse)
 library(ggpubr)
 library(readxl)
 
-#Metadata til at plotte senere
 atlas_meta <- read_delim("/work/without_ambientRNAremoval/data-raw/ATLAS_Visit_1_Data_11_12_2024.csv", 
     delim = ";", escape_double = FALSE, trim_ws = TRUE)
 
@@ -31,17 +30,13 @@ SeqID <- read_delim("/work/Liver_WAT_crosstalk_snRNA_snMultiomeRNA/To_Johanne/Se
     delim = ";", escape_double = FALSE, trim_ws = TRUE)
 atlas_meta$SeqID<-SeqID[match(atlas_meta$recordid,SeqID$recordid ),]$SeqID
 
-#Markører for mine myeloide celle populationer
+
 MyeloidMarkers <- read_excel("/work/without_ambientRNAremoval/data/DElists/MyeloidMarkers.xlsx")
 
-#Udvælgelse af gener der er LAM markører og cutoff på signifikans, LFC og hvor mange procent celler genet er udtrykt i (LAM og ikke LAM)
 LAM_genes<-MyeloidMarkers[MyeloidMarkers$cluster=="LAM" & MyeloidMarkers$p_val_adj<0.000000001 & MyeloidMarkers$avg_log2FC>0.6 & MyeloidMarkers$pct.2<0.25&MyeloidMarkers$pct.1>0.05,]$gene
-
 
 ```
 
-
-#
 ```{r}
 
 vsd_corrected <- read_csv("/work/without_ambientRNAremoval/data-raw/vsd_corrected.csv")
@@ -49,8 +44,6 @@ vsd_corrected <- read_csv("/work/without_ambientRNAremoval/data-raw/vsd_correcte
 vsd_corrected <- as.data.frame(vsd_corrected)  # Convert tibble to data.frame
 rownames(vsd_corrected) <- vsd_corrected$...1  # Set row names as desired
 vsd_corrected$...1 <- NULL  # Optionally remove the column used for row names
-
-
 
 
 bulk_expr_scaled <- scale(vsd_corrected)
@@ -74,8 +67,6 @@ X<-X[rownames(X) %in% LAM_proportions$SeqID,]
 y<-LAM_proportions[match(rownames(X),LAM_proportions$SeqID),]$LAM
 
 ```
-
-
 
 ```{r}
 
@@ -124,11 +115,9 @@ plot(y, y_pred, main = "LASSO Prediction Performance",
 # Add a 45-degree perfect prediction line
 abline(0, 1, col = "red", lwd = 2)
 
-#kør denne hvis du vil se generne
-#selected_genes
-#kør denne hvis du vil se coefficienterne 
-#coef(lasso_model)
+
 ```
+
 ```{r}
 
 X_full<-bulk_expr_scaled[rownames(bulk_expr_scaled)%in%LAM_genes,]
@@ -140,9 +129,6 @@ X_full <- t(X_full)
 y_pred_full <-  predict(lasso_model, newx = X_full, s = best_lambda)
 
 ```
-
-
-
 
 ```{r, fig.width=10, fig.height=6}
 library(readr)
@@ -178,8 +164,8 @@ my_comparisons <- list(
 
 
 ggplot(y_pred_full_plotting, aes(x = as.factor(clust), y = s1,fill = clust)) + 
-  geom_boxplot(outlier.shape = NA) +  # Fjern de automatiske outliers fra boxplot
-  geom_jitter(aes(color = as.factor(clust)),color = "grey", width = 0.2, size = 1.5, alpha = 0.7) +  # Tilføj de individuelle punkter
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(aes(color = as.factor(clust)),color = "grey", width = 0.2, size = 1.5, alpha = 0.7) +  
   labs(x = "", y = "LAM LASSO model", title = "")+
     theme_classic()+
 theme(legend.position = "none",axis.text = element_text(size = 12, face = "bold"),axis.text.x = element_text(angle = 40, hjust = 1))+ scale_fill_manual(values=c("grey", "red","cyan"))
@@ -206,6 +192,3 @@ writeLines(output_lines, "/work/without_ambientRNAremoval/figures/stats_LAM_endo
 
 
 ```
-
-
-

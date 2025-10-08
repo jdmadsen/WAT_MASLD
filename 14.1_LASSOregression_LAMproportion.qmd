@@ -38,8 +38,6 @@ LAM_genes<-MyeloidMarkers[MyeloidMarkers$cluster=="LAM" & MyeloidMarkers$p_val_a
 
 ```
 
-
-
 ```{r}
 SeqID <- read_delim("/work/Liver_WAT_crosstalk_snRNA_snMultiomeRNA/To_Johanne/SeqID.csv", 
     delim = ";", escape_double = FALSE, trim_ws = TRUE)
@@ -72,7 +70,6 @@ X<-X[rownames(X) %in% LAM_proportions$SeqID,]
 
 y<-LAM_proportions[match(rownames(X),LAM_proportions$SeqID),]$LAM
 ```
-
 
 
 ```{r}
@@ -146,10 +143,6 @@ y_pred_full <-  predict(lasso_model, newx = X_full, s = best_lambda)
 
 ```
 
-
-
-
-
 ```{r, fig.width=10, fig.height=6}
 library(readr)
 
@@ -170,7 +163,6 @@ y_pred_full_plotting<- y_pred_full_plotting%>%
 y_pred_full_plotting$saf<- factor(y_pred_full_plotting$saf, levels=c("1","2","3"))
 ```
 
-
 ```{r, fig.width=4, fig.height=6}
 
 my_comparisons <- list(
@@ -180,8 +172,8 @@ my_comparisons <- list(
 
 #pdf("/work/without_ambientRNAremoval/figures/3H_original_females_saf_lasso_LAM.pdf", width = 4, height = 6)
 ggplot(y_pred_full_plotting, aes(x = as.factor(saf), y = s1,fill = saf)) + 
-  geom_boxplot(outlier.shape = NA) +  # Fjern de automatiske outliers fra boxplot
-  geom_jitter(aes(color = as.factor(clust)),color = "grey", width = 0.2, size = 1.5, alpha = 0.7) +  # Tilføj de individuelle punkter
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(aes(color = as.factor(clust)),color = "grey", width = 0.2, size = 1.5, alpha = 0.7) +  
   labs(x = "", y = "LAM LASSO model", title = "")+
     theme_classic()+
 theme(legend.position = "none",axis.text = element_text(size = 12, face = "bold"),axis.text.x = element_text(angle = 40, hjust = 1))+ scale_fill_manual(values=c("#00AFBB", "#E7B800","#FC4E07"))
@@ -210,5 +202,3 @@ output_lines <- c(
 # Save to a .txt file
 writeLines(output_lines, "/work/without_ambientRNAremoval/figures/stats_LAM_saf.txt")
 ```
-
-

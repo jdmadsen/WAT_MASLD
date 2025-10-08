@@ -35,11 +35,11 @@ n.cores = 62
 ```
 
 ```{r chunk 1}
-seurat_common <- qread("../data/seurat_object.qs")
+seurat_common <- qread("/work/WAT_MASLD/Data/seurat_object.qs")
 ```
 
 ```{r chunk 1}
-seurat_common_with_ambientremoval <- qread("/work/with_ambientRNAremoval/data/seurat_object_annotated.qs")
+seurat_common_with_ambientremoval <- qread("/work/WAT_MASLD/Data/seurat_object_annotated_ambientRNAremoval.qs")
 
 ambient_filtered_cells<-colnames(seurat_common_with_ambientremoval)
 
@@ -60,5 +60,5 @@ matching_colnames <- colnames(seurat_common)[rowSums(matches) > 0]
 
 
 seurat_common_filtered<-subset(seurat_common, cells=matching_colnames)
-qsave(seurat_common_filtered ,"../data/filtered_seurat_object.qs")
+#qsave(seurat_common_filtered ,"/work/WAT_MASLD/Data/filtered_seurat_object.qs")
 ```

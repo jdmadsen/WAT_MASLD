@@ -1,5 +1,5 @@
 ---
-title: "Annotation of snRNA samples without ambient RNA removal"
+title: "Annotation of snRNA samples"
 author: "Aino R. Peltonen"
 date: "`r Sys.Date()`"
 format:
@@ -195,7 +195,7 @@ seurat_common <- seurat_common %>%
 ```
 
 ```{r info}
-qsave(seurat_common, "../data/seurat_object.qs")
+qsave(seurat_common, "/work/WAT_MASLD/Data/seurat_object.qs")
 sessionInfo()
 ```
 
