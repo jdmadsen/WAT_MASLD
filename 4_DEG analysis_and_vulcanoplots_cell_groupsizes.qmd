@@ -21,9 +21,9 @@ library(org.Hs.eg.db)
 #options(Seurat.object.assay.version = "v3")
 n.cores = 32
 
-seurat_common <- qread("/data/seurat_object_annotated.qs")
+seurat_common <- qread("/data/seurat_common_annotated_publication.qs")
 
-atlas_meta <- read_delim("/data-raw/ATLAS_Visit_1_Data_11_12_2024.csv", 
+atlas_meta <- read_delim("/data/ATLAS_Visit_1_Data_11_12_2024_REDUCED.csv", 
     delim = ";", escape_double = FALSE, trim_ws = TRUE)
 
 atlas_meta$sample <- ifelse(atlas_meta$recordid %in% c(1:9),

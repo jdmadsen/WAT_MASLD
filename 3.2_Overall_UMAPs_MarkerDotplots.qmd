@@ -15,7 +15,7 @@ library(ggplot2)
 library(magrittr)
 
 #Loading seurat object
-seurat_common <- qread("/data/seurat_object_annotated.qs")
+seurat_common <- qread("/data/seurat_common_annotated_publication.qs")
 ```
 
 ```{r}
