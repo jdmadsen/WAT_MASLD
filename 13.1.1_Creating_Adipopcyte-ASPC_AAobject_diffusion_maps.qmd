@@ -20,13 +20,10 @@ library(harmony)
 library(ggplot2)
 library(RDS)
 library(slingshot)
-#seurat_common <- qread("/work/without_ambientRNAremoval/data/seurat_object_annotated.qs")
 
-#ASPCs_common<-qread("/work/without_ambientRNAremoval/data/ASPC_common_Annotated.qs")
-#Adipocytes_common<-qread("/work/without_ambientRNAremoval/data/Adipocytes_common_Annotated.qs")
+ASPCs_common<-qread("/work/without_ambientRNAremoval/data/ASPCs_common_annotated_publication.qs")
+Adipocytes_common<-qread("/work/without_ambientRNAremoval/data/Adipocytes_common_annotated_publication.qs")
 
-AA_common<-qread("/work/without_ambientRNAremoval/data/AA_common.qs")
-#qsave(AA_common,"/work/without_ambientRNAremoval/data/AA_common.qs" )
 ```
 
 
@@ -150,6 +147,9 @@ snn_harmony
 snn_saf
 snn_donor
 snn_splitsaf
+
+#qsave(AA_common,"/work/without_ambientRNAremoval/data/AA_common_annotated_publication.qs" )
+AA_common<-qread("/work/without_ambientRNAremoval/data/AA_common_annotated_publication.qs")
 
 ```
 
