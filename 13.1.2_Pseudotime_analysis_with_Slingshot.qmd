@@ -1,0 +1,104 @@
+---
+title: "Pseudotime analysis with slingshot on embedding 24"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(ggplot2)
+library(RDS)
+library(slingshot)
+
+AA_common<-qread("/work/without_ambientRNAremoval/data/AA_common_annotated_publication.qs")
+
+```
+
+
+```{r, results='hide'}
+embeddings<-readRDS("/work/without_ambientRNAremoval/doc/embeddings.Rds")
+
+```
+
+
+#slingshot
+```{r, fig.width=6, fig.height=6}
+annotations <- AA_common@meta.data$Annotation %>% setNames(AA_common@meta.data %>% rownames())
+# Replace 'annotation_column_name' with the actual column name
+
+embeddings <-  Embeddings(AA_common, reduction = "diffusion")
+
+idx <- rownames(embeddings)
+
+sds_obj <- slingshot(embeddings[idx,1:2] %>% `colnames<-`(c("DC_1","DC_2")), annotations, end.clus = "Adipocytes", start.clus = "DPP4+") # Opdatér til dine clusternavne
+
+sds <- as.SlingshotDataSet(sds_obj)
+
+pseudotime1 <- sds_obj@assays@data@listData$pseudotime[, 1] %>% 
+  .[!is.na(.)]
+pseudotime2 <- sds_obj@assays@data@listData$pseudotime[, 2] %>% 
+  .[!is.na(.)]
+
+#write.csv(pseudotime1, ("/work/without_ambientRNAremoval/data/pseudotime1.csv"))
+
+#write.csv(pseudotime2, ("/work/without_ambientRNAremoval/data/pseudotime2.csv"))
+
+#qsave(sds_obj,("/work/without_ambientRNAremoval/data/sds_obj_DC12_emb24.qs"))
+
+```
+
+
+
+```{r, fig.width=6, fig.height=6}
+#DIM 1 and 3
+
+annotations <- AA_common@meta.data$Annotation %>% setNames(AA_common@meta.data %>% rownames())
+saf <- AA_common@meta.data$saf %>% setNames(AA_common@meta.data %>% rownames())
+# Replace 'annotation_column_name' with the actual column name
+
+embeddings <-  Embeddings(AA_common, reduction = "diffusion")
+
+idx <- rownames(embeddings)
+
+
+
+sds_obj <- slingshot(embeddings[idx,c(1,3)] %>% `colnames<-`(c("DC_1","DC_3")), annotations, end.clus = "Adipocytes", start.clus = "DPP4+") # Opdatér til dine clusternavne
+
+
+sds <- as.SlingshotDataSet(sds_obj)
+
+
+
+if (length(sds@lineages) == 2) {
+  
+pseudotime1 <- sds_obj@assays@data@listData$pseudotime[, 1] %>% 
+  .[!is.na(.)]
+
+
+pseudotime2 <-  sds_obj@assays@data@listData$pseudotime[, 2] %>%
+        .[!is.na(.)]
+} else {
+  pseudotime1 <- sds_obj@assays@data@listData$pseudotime[, 1] %>% 
+  .[!is.na(.)]
+}
+
+#write.csv(pseudotime1, ("/work/without_ambientRNAremoval/data/pseudotime1_DC13_emb24.csv"))
+
+#write.csv(pseudotime2, ("/work/without_ambientRNAremoval/data/pseudotime2_DC13_emb24.csv"))
+
+
+#qsave(sds_obj,("/work/without_ambientRNAremoval/data/sds_obj_DC13_emb24.qs"))
+
+
+```

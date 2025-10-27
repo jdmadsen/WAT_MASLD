@@ -1,0 +1,219 @@
+---
+title: "Creating Adipopcyte-ASPC (AA) object and diffusion maps"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(ggplot2)
+library(RDS)
+library(slingshot)
+#seurat_common <- qread("/work/without_ambientRNAremoval/data/seurat_object_annotated.qs")
+
+#ASPCs_common<-qread("/work/without_ambientRNAremoval/data/ASPC_common_Annotated.qs")
+#Adipocytes_common<-qread("/work/without_ambientRNAremoval/data/Adipocytes_common_Annotated.qs")
+
+AA_common<-qread("/work/without_ambientRNAremoval/data/AA_common.qs")
+#qsave(AA_common,"/work/without_ambientRNAremoval/data/AA_common.qs" )
+```
+
+
+#Making object with adipocytes and ASPCs
+```{r}
+ASPCs_Adipocytes<-list(ASPCs_common,Adipocytes_common)
+
+AA_common <- purrr::reduce(ASPCs_Adipocytes, merge)
+DefaultAssay(AA_common) <- "RNA"
+
+AA_donor_list <- AA_common %>%
+  SplitObject(split.by = "Donor")
+
+
+# 2. LogNormalize RNA data
+AA_donor_list <- lapply(AA_donor_list, function(seurat_obj){
+  output <- Seurat::NormalizeData(seurat_obj,
+                                  assay = "RNA",
+                                  verbose = TRUE)
+  return(output)
+})
+
+
+
+AA_common <- purrr::reduce(AA_donor_list, merge)
+DefaultAssay(AA_common) <- "RNA"
+
+AA_common<-Seurat::FindVariableFeatures(AA_common,
+                                  assay = "RNA",
+                                  verbose = TRUE)
+
+ 
+AA_common <- ScaleData(AA_common, split.by="Donor")
+
+
+
+AA_common <- AA_common %>%
+  RunPCA(seed.use = 1000,
+         verbose = TRUE)
+
+```
+
+
+```{r}
+AA_common <- AA_common %>%
+  harmony::RunHarmony(
+    group.by.vars = "Pool",
+    assay.use = 'RNA',
+    reduction.save = 'harmony.pca.RNA',
+    project.dim = F,
+    kmeans_init_nstart=20,
+    kmeans_init_iter_max=100
+  )
+
+# UMAP
+AA_common <- AA_common %>%
+  Seurat::RunUMAP(
+    dims = 1:20,
+    reduction = 'harmony.pca.RNA',
+    reduction.name = 'umap.rna',
+    reduction.key = 'rnaUMAP_',
+    seed.use = 1000,
+    verbose = TRUE)
+
+```
+
+```{r}
+AA_common <- AA_common %>%
+  Seurat::FindNeighbors(reduction = "harmony.pca.RNA",
+                        dims = 1:20, compute.SNN = TRUE)%>% 
+  Seurat::FindNeighbors(reduction = "harmony.pca.RNA",
+                        dims = 1:20, return.neighbor = TRUE)
+#Do twice. Once with compute.SNN = TRUE, once with return.neighbor = TRUE. Can't run both
+
+
+# Run UMAP dimensional reduction based on WNN
+AA_common <- AA_common %>%
+  RunUMAP(
+    nn.name = "RNA.nn",
+    reduction.name = "umap.snn",
+    reduction.key = "snnUMAP_",
+    seed.use = 1000)
+
+# Cluster determination
+#AA_common <- AA_common %>%
+#  FindClusters(
+#    graph.name = "RNA_snn",
+#    algorithm = 3,
+#    res =0.3,
+#    random.seed = 1000,
+#    verbose = TRUE
+#  )
+
+```
+
+
+```{r}
+
+
+snn_dim <- DimPlot(AA_common,
+                   reduction = 'umap.snn',
+                   label.size = 3,
+                   label = TRUE)
+
+snn_harmony <- DimPlot(AA_common,
+                       reduction = 'umap.snn',
+                       group.by = "Pool",
+                       label.size = 3)
+snn_saf <- DimPlot(AA_common,
+                       reduction = 'umap.snn',
+                       group.by = "saf",
+                       label.size = 3)
+snn_donor <- DimPlot(AA_common,
+                       reduction = 'umap.snn',
+                       group.by = "Donor",
+                       label.size = 3, split.by = "saf")
+snn_splitsaf<-DimPlot(AA_common, reduction = 'umap.snn',
+                       label.size = 3, split.by = "saf")
+snn_dim 
+snn_harmony
+snn_saf
+snn_donor
+snn_splitsaf
+
+```
+
+#I split by saf and not donor since some donors don't have/have too few PLAU+ cells and this causes issues
+```{r}
+
+embeddings <- list()
+for (nfeats in c(25,50,100,250)) { # Not tested 25+50
+  # Recreate original object
+  final <- AA_common
+  # ASPC DPP4
+  DPP4 <- subset(final, Annotation == "DPP4+")
+  VariableFeatures(DPP4) <- NULL
+  obj.list <- SplitObject(DPP4, split.by = "saf")
+  feats_DPP4 <- suppressWarnings(SelectIntegrationFeatures(obj.list, nfeatures = nfeats, verbose = FALSE))
+  # ASPC CXCL14+
+  CXCL14 <- subset(final, Annotation == "CXCL14+")
+  VariableFeatures(CXCL14) <- NULL
+  obj.list <- SplitObject(CXCL14, split.by = "saf")
+  feats_CXCL14 <- suppressWarnings(SelectIntegrationFeatures(obj.list, nfeatures = nfeats, verbose = FALSE))
+  # ASPC PPARG+
+  PPARG <- subset(final, Annotation == "PPARG+")
+  VariableFeatures(PPARG) <- NULL
+  obj.list <- SplitObject(PPARG, split.by = "saf")
+  feats_PPARG <- suppressWarnings(SelectIntegrationFeatures(obj.list, nfeatures = nfeats, verbose = FALSE))
+  # ASPC
+  EPHA3 <- subset(final, Annotation == "EPHA3+")
+  VariableFeatures(EPHA3) <- NULL
+  obj.list <- SplitObject(EPHA3, split.by = "saf")
+  feats_EPHA3 <- suppressWarnings(SelectIntegrationFeatures(obj.list, nfeatures = nfeats, verbose = FALSE))
+  # ASPC PLAU+
+  PLAU <- subset(final, Annotation == "PLAU+")
+  VariableFeatures(PLAU) <- NULL
+  obj.list <- SplitObject(PLAU, split.by = "saf")
+  feats_PLAU <- suppressWarnings(SelectIntegrationFeatures(obj.list, nfeatures = nfeats, verbose = FALSE))
+  # Adipocytes
+  Ad <- subset(final, Annotation == "Adipocytes")
+  VariableFeatures(Ad) <- NULL
+  obj.list <- SplitObject(Ad, split.by = "saf")
+  feats_Ad <- suppressWarnings(SelectIntegrationFeatures(obj.list, nfeatures = nfeats, verbose = FALSE))
+  # Combine
+  feats <- unique(c(feats_DPP4,feats_CXCL14,feats_PPARG,feats_EPHA3,feats_PLAU, feats_Ad))
+  ## Embed
+  # PCA
+  VariableFeatures(final) <- feats
+  final <- ScaleData(final)
+  final <- RunPCA(final)
+  for (useHarmony in c(TRUE, FALSE)) {
+    if (useHarmony) {
+      final <- suppressWarnings(RunHarmony(final, group.by.vars = "Pool", verbose  = FALSE))
+      pcs <- final@reductions$harmony@cell.embeddings
+    } else {
+      pcs <- final@reductions$pca@cell.embeddings
+    }
+    for (dims in c(5, 10, 15, 20)) {
+      dm <- destiny::DiffusionMap(pcs[,1:dims], verbose = FALSE, n_pcs = NA)
+      dm_ev <- dm@eigenvectors
+      colnames(dm_ev) <- paste("DC", c(1:20), sep="_")
+      embeddings[[(length(embeddings) + 1)]] <- dm_ev
+      names(embeddings)[length(embeddings)] <- paste(nfeats, useHarmony, dims, sep="_")
+       saveRDS(embeddings, "/work/without_ambientRNAremoval/doc/embeddings.Rds")
+    }
+  }
+}
+
+```
+
