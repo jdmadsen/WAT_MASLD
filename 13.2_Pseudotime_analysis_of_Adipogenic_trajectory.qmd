@@ -1,0 +1,473 @@
+---
+title: "Pseudotime analysis. trajectory 2 (Adipogenic tradjectory)"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(ggplot2)
+library(RDS)
+library(slingshot)
+library(gamm4)
+library(scHelper)
+library(ComplexHeatmap)
+library(seriation)
+AA_common<-qread("/work/without_ambientRNAremoval/data/AA_common_annotated_publication.qs")
+embeddings<-readRDS("/work/without_ambientRNAremoval/doc/embeddings.Rds")
+
+```
+
+```{r, fig.width=6, fig.height=6}
+
+#pdf("/work/without_ambientRNAremoval/figures/S5B_Diffusion_map_DC12_saf.pdf", width = 7, height = 5)
+
+DimPlot(AA_common, reduction = "diffusion", group.by="saf")+ scale_color_manual(values=c("#00AFBB", "#E7B800","#FC4E07"))
+
+#dev.off()
+
+
+DimPlot(AA_common, reduction = "diffusion", dims = c(1,3), group.by="saf")+ scale_color_manual(values=c("#00AFBB", "#E7B800","#FC4E07"))
+
+annotations <- AA_common@meta.data$Annotation %>% setNames(AA_common@meta.data %>% rownames())
+# Replace 'annotation_column_name' with the actual column name
+
+embeddings <-  Embeddings(AA_common, reduction = "diffusion")
+
+idx <- rownames(embeddings)
+
+
+#sds_obj<- qread("/work/without_ambientRNAremoval/data/sds_obj_DC12_emb24.qs")
+#sds <- as.SlingshotDataSet(sds_obj)
+
+sds_obj<- qread("/work/without_ambientRNAremoval/data/sds_obj_DC12_emb24.qs")
+
+sds <- as.SlingshotDataSet(sds_obj)
+
+pseudotime2 <- sds_obj@assays@data@listData$pseudotime[, 2] %>% 
+  .[!is.na(.)]
+
+
+
+plot.df <- embeddings[,1:2] %>% 
+  as.data.frame() %>% 
+  `colnames<-`(c("DC_1","DC_2"))
+
+
+plot.df$annotation <- annotations[rownames(plot.df)]
+
+#something is going wrong here.
+
+rownames(plot.df)<-rownames(embeddings[,1:2])
+
+line.df <- lapply(1:length(sds@curves), \(lineage) {
+  sds@curves[[lineage]]$s[,1:2] %>% 
+    data.frame() %>% 
+    mutate(lineage = lineage %>% as.factor())
+}) %>% 
+  setNames(sds@curves %>% names()) %>% 
+  bind_rows()
+
+my_levels <- c("DPP4+","CXCL14+","PPARG+","EPHA3+","PLAU+","Adipocytes")
+
+plot.df$annotation<- factor(plot.df$annotation, levels=my_levels)
+
+
+
+p9 <- ggplot(plot.df, aes(DC_1, DC_2, col = annotation)) + 
+  geom_point(size = 0.3) +
+  geom_path(data = line.df, aes(DC_1, DC_2, group = lineage), inherit.aes = F) + 
+  theme_classic() + 
+  theme(legend.position = "bottom") + 
+  labs(col = "")+ scale_color_manual(values = c("#F8766D", "#B79F00","#00C08B","#00B4F0","#F564E3","#FF64B0"))
+
+#pdf("/work/without_ambientRNAremoval/figures/S5A_Diffusion_map_DC12_Annotation.pdf", width = 7, height = 5)
+p9
+
+#dev.off()
+
+```
+
+
+
+
+
+```{r}
+sds_obj<- qread("/work/without_ambientRNAremoval/data/sds_obj_DC13_emb24.qs")
+
+sds <- as.SlingshotDataSet(sds_obj)
+
+pseudotime2 <- sds_obj@assays@data@listData$pseudotime[, 2] %>% 
+  .[!is.na(.)]
+
+
+intervals <- list(
+     c(0.0285, 0.03), 
+    c(0.02, 0.03),
+  c(0.015, 0.03),
+  c(0.0285, 0.035),
+  c(0.02, 0.035),
+  c(0.015, 0.035),
+  c(0.02, 0.04),
+  c(0.0285, 0.045),
+  c(0.0285, 0.05)
+)
+
+plot_list <- list()
+
+for (i in seq_along(intervals)) {
+  lower <- intervals[[i]][1]
+  upper <- intervals[[i]][2]
+  
+  Adipocyte_pseudoint <- names(pseudotime2[pseudotime2 < upper & pseudotime2 > lower])
+  
+  df <- plot.df %>%
+    mutate(color = ifelse(rownames(.) %in% Adipocyte_pseudoint, "red", "blue"))
+  
+  # Print checks
+  cat("\nInterval", i, ":", lower, "-", upper, "\n")
+  print(head(df))          # first rows
+  print(table(df$color))   # red/blue counts
+  
+  
+  p <- ggplot(df, aes(DC_1, DC_2, col = color)) + 
+    geom_point(size = 0.3) +
+    geom_path(data = line.df, aes(DC_1, DC_2, group = lineage), inherit.aes = F) + 
+    theme_bw() + 
+    theme(legend.position = "none") + 
+    labs(col = "", title = paste("Interval:", lower, "-", upper))
+  
+  plot_list[[i]] <- p
+}
+
+wrap_plots(plot_list) 
+
+#The final interval we went with
+plot_list[7]
+
+```
+```{r, fig.width=6, fig.height=6}
+
+
+annotations <- AA_common@meta.data$Annotation %>% setNames(AA_common@meta.data %>% rownames())
+# Replace 'annotation_column_name' with the actual column name
+
+embeddings <-  Embeddings(AA_common, reduction = "diffusion")
+
+idx <- rownames(embeddings)
+
+
+
+plot.df <- embeddings[,c(1,3)] %>% 
+  as.data.frame() %>% 
+  `colnames<-`(c("DC_1","DC_3"))
+
+
+plot.df$annotation <- annotations[rownames(plot.df)]
+
+#something is going wrong here.
+
+rownames(plot.df)<-rownames(embeddings[,1:3])
+
+line.df <- lapply(1:length(sds@curves), \(lineage) {
+  sds@curves[[lineage]]$s[,1:2] %>% 
+    data.frame() %>% 
+    mutate(lineage = lineage %>% as.factor())
+}) %>% 
+  setNames(sds@curves %>% names()) %>% 
+  bind_rows()
+
+my_levels <- c("DPP4+","CXCL14+","PPARG+","EPHA3+","PLAU+","Adipocytes")
+
+plot.df$annotation<- factor(plot.df$annotation, levels=my_levels)
+
+
+
+p9 <- ggplot(plot.df, aes(DC_1, DC_3, col = annotation)) + 
+  geom_point(size = 0.3) +
+  geom_path(data = line.df, aes(DC_1, DC_3, group = lineage), inherit.aes = F) + 
+  theme_classic() + 
+  theme(legend.position = "bottom") + 
+  labs(col = "")+ scale_color_manual(values = c("#F8766D", "#B79F00","#00C08B","#00B4F0","#F564E3","#FF64B0"))
+
+#pdf("/work/without_ambientRNAremoval/figures/S5A_Diffusion_map_DC12_Annotation.pdf", width = 7, height = 5)
+p9
+
+#dev.off()
+plot_list <- list()
+
+for (i in seq_along(intervals)) {
+  lower <- intervals[[i]][1]
+  upper <- intervals[[i]][2]
+  
+  Adipocyte_pseudoint <- names(pseudotime2[pseudotime2 < upper & pseudotime2 > lower])
+  
+  df <- plot.df %>%
+    mutate(color = ifelse(rownames(.) %in% Adipocyte_pseudoint, "red", "blue"))
+  
+  # Print checks
+  cat("\nInterval", i, ":", lower, "-", upper, "\n")
+  print(head(df))          # first rows
+  print(table(df$color))   # red/blue counts
+  
+  
+  p <- ggplot(df, aes(DC_1, DC_3, col = color)) + 
+    geom_point(size = 0.3) +
+    geom_path(data = line.df, aes(DC_1, DC_3, group = lineage), inherit.aes = F) + 
+    theme_bw() + 
+    theme(legend.position = "none") + 
+    labs(col = "", title = paste("Interval:", lower, "-", upper))
+  
+  plot_list[[i]] <- p
+}
+
+wrap_plots(plot_list) 
+
+#The final interval we went with
+plot_list[7]
+
+```
+
+
+#Finding markergenes for all intervals with all higher pseudotime cells (adipocytes) as control cells
+```{r}
+
+marker_list <- list()
+interval_names_list<-list()
+ctrl_names_list<-list()
+
+for (i in seq_along(intervals)) {
+  lower <- intervals[[i]][1]
+  upper <- intervals[[i]][2]
+  
+  Adipocyte_pseudoint <- names(pseudotime2[pseudotime2 < upper & pseudotime2 > lower])
+  Adipocyte_pseudoctrl <- names(pseudotime2[pseudotime2 > upper])
+   
+  Adipocyte_pseudoint<-Adipocyte_pseudoint[Adipocyte_pseudoint %in% colnames(AA_common)]
+  Adipocyte_pseudoctrl <- Adipocyte_pseudoctrl[Adipocyte_pseudoctrl %in% colnames(AA_common)]
+   
+  pseudoint_markers<-FindMarkers(AA_common,ident.1=Adipocyte_pseudoint, ident.2=Adipocyte_pseudoctrl)
+
+    interval_name <- paste0("Interval_", lower, "_", upper)
+  
+  marker_list[[interval_name]] <- pseudoint_markers
+
+    interval_names_list[[interval_name]] <- Adipocyte_pseudoint
+    ctrl_names_list[[interval_name]] <- Adipocyte_pseudoctrl
+}
+
+#markers for the interval we chose
+marker_list[7]
+
+#qsave(marker_list,"/work/without_ambientRNAremoval/data/HAdipocyte_Markerlist_eai_new.qs")
+
+
+
+```
+
+
+```{r, fig.height=5}
+marker_list<-qread("/work/without_ambientRNAremoval/data/HAdipocyte_Markerlist_eai_new.qs")
+# Initialize list to store donor counts for each interval
+donor_counts_list  <- list()
+
+# Get all possible donor IDs across all intervals
+all_possible_donors <- unique(unlist(lapply(interval_names_list, function(x) sub("!.*", "", x))))
+
+for (interval_name in names(interval_names_list )) {
+  # Extract donor names for the current interval
+  donor_names <- interval_names_list [[interval_name]]
+  
+  # Extract donor IDs before '!'
+  donor_ids <- sub("!.*", "", donor_names)
+  
+  # Count occurrences of each donor
+  donor_counts <- table(factor(donor_ids, levels = all_possible_donors))  # Ensures missing donors get 0
+  
+  # Store in list with the interval name
+  donor_counts_list [[interval_name]] <- donor_counts
+}
+
+# Check output
+donor_counts_list
+
+
+# Convert the donor_counts_list into a data frame
+donor_counts_df <- bind_rows(lapply(names(donor_counts_list ), function(interval) {
+  data.frame(
+    Interval = as.character(interval),  # Ensure Interval is a character
+    Donor = names(donor_counts_list [[interval]]),
+    Count = as.numeric(donor_counts_list [[interval]])
+  )
+}))
+
+donor_counts_df$Interval<-factor(donor_counts_df$Interval, levels=names(interval_names_list))
+
+ordered_donors <- c("Donor_49",  "Donor_130",  "Donor_43",  "Donor_74",  "Donor_47",  
+                    "Donor_78",   "Donor_52", "Donor_72",  "Donor_26",  "Donor_64",  
+                    "Donor_61",  "Donor_40",  "Donor_141",  "Donor_207",  "Donor_9_",  
+                    "Donor_82",  "Donor_6_",  "Donor_102",  "Donor_12",  "Donor_199",  
+                    "Donor_10",  "Donor_128",  "Donor_135",  "Donor_14")#
+
+saf<-c(rep("S1",8),rep("S2",8),rep("S3",8))
+
+ordered_donors_saf<-cbind(ordered_donors,saf)
+colnames(ordered_donors_saf)<-c("Donor","saf")
+
+donor_counts_df<-merge(donor_counts_df,ordered_donors_saf,by="Donor",all=T )
+
+donor_counts_df$Count
+donor_counts_df$Donor<-factor(donor_counts_df$Donor, levels=ordered_donors)
+
+
+ggplot(donor_counts_df[donor_counts_df$Interval=="Interval_0.02_0.04",], aes(x = saf, y = Count, fill=saf))+
+  geom_boxplot()+
+ # Create separate plots for each interval
+  theme_minimal() +
+  theme(legend.position = "none")+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +  # Rotate x-axis labels for readability
+  labs(title = "", x = "", y = "Total donor ADH1Bhi adipocytes")+ scale_fill_manual(values=c("#00AFBB", "#E7B800","#FC4E07"))+ theme_classic()
+
+
+#qsave(donor_counts_df,"/work/without_ambientRNAremoval/data/Healthy_adipocyte_donorcount_intervals_pseudotime_eai_new.qs")
+```
+
+```{r, fig.height=5, fig.width=4}
+
+seurat_common <- qread("/work/without_ambientRNAremoval/data/seurat_common_annotated_publication.qs")
+
+total_cells_per_donor<-as.data.frame(table(seurat_common$Donor))
+
+
+donor_counts_df<-donor_counts_df[donor_counts_df$Interval=="Interval_0.02_0.04",]
+
+donor_counts_df$total_donor_cells<-total_cells_per_donor[match(total_cells_per_donor$Var1,donor_counts_df$Donor),]$Freq
+
+
+my_comparisons <- list(
+  c("S1", "S2"),
+  c("S2", "S3"),
+  c("S1","S3"))
+
+donor_counts_df$percent_ADH1B<-(donor_counts_df$Count/donor_counts_df$total_donor_cells)*100
+
+library(ggpubr)
+#pdf("/work/without_ambientRNAremoval/figures/S5D_boxplot_donors_saf_ADH1B_percent.pdf", width = 7, height = 5)
+ggplot(donor_counts_df, aes(x = saf, y = percent_ADH1B, fill=saf))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter(color = "grey", width = 0.2, size = 1.5, alpha = 0.7)+
+  theme_minimal() +
+  theme(legend.position = "none")+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +  # Rotate x-axis labels for readability
+  labs(title = "", x = "", y = "Percent donor ADH1Bhi adipocytes")+ scale_fill_manual(values=c("#00AFBB", "#E7B800","#FC4E07"))+ theme_classic()+stat_compare_means(method = "kruskal.test", label = "p.format", label.y = 50)
+#dev.off()
+
+
+pairwise.wilcox.test(donor_counts_df$percent_ADH1B, donor_counts_df$saf, p.adjust.method = "BH")
+
+```
+
+```{r, fig.height=5}
+marker_list<-qread("/work/without_ambientRNAremoval/data/HAdipocyte_Markerlist_eai_new.qs")
+
+donor_counts_list  <- list()
+
+# Get all possible donor IDs across all intervals
+all_possible_donors <- unique(unlist(lapply(ctrl_names_list, function(x) sub("!.*", "", x))))
+
+for (interval_name in names(ctrl_names_list )) {
+  # Extract donor names for the current interval
+  donor_names <- ctrl_names_list [[interval_name]]
+  
+  # Extract donor IDs before '!'
+  donor_ids <- sub("!.*", "", donor_names)
+  
+  # Count occurrences of each donor
+  donor_counts <- table(factor(donor_ids, levels = all_possible_donors))  # Ensures missing donors get 0
+  
+  # Store in list with the interval name
+  donor_counts_list [[interval_name]] <- donor_counts
+}
+
+# Check output
+donor_counts_list
+
+
+# Convert the donor_counts_list into a data frame
+donor_counts_df <- bind_rows(lapply(names(donor_counts_list ), function(interval) {
+  data.frame(
+    Interval = as.character(interval),  # Ensure Interval is a character
+    Donor = names(donor_counts_list [[interval]]),
+    Count = as.numeric(donor_counts_list [[interval]])
+  )
+}))
+
+donor_counts_df$Interval<-factor(donor_counts_df$Interval, levels=names(interval_names_list))
+
+ordered_donors <- c("Donor_49",  "Donor_130",  "Donor_43",  "Donor_74",  "Donor_47",  
+                    "Donor_78",   "Donor_52", "Donor_72",  "Donor_26",  "Donor_64",  
+                    "Donor_61",  "Donor_40",  "Donor_141",  "Donor_207",  "Donor_9_",  
+                    "Donor_82",  "Donor_6_",  "Donor_102",  "Donor_12",  "Donor_199",  
+                    "Donor_10",  "Donor_128",  "Donor_135",  "Donor_14")#
+
+saf<-c(rep("S1",8),rep("S2",8),rep("S3",8))
+
+ordered_donors_saf<-cbind(ordered_donors,saf)
+colnames(ordered_donors_saf)<-c("Donor","saf")
+
+donor_counts_df<-merge(donor_counts_df,ordered_donors_saf,by="Donor",all=T )
+
+donor_counts_df$Count
+donor_counts_df$Donor<-factor(donor_counts_df$Donor, levels=ordered_donors)
+
+
+ggplot(donor_counts_df[donor_counts_df$Interval=="Interval_0.02_0.04",], aes(x = saf, y = Count, fill=saf))+
+  geom_boxplot()+
+ # Create separate plots for each interval
+  theme_minimal() +
+  theme(legend.position = "none")+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +  # Rotate x-axis labels for readability
+  labs(title = "", x = "", y = "Total donor SFRP4hi adipocytes")+ scale_fill_manual(values=c("#00AFBB", "#E7B800","#FC4E07"))+ theme_classic()
+
+
+```
+
+```{r, fig.height=5, fig.width=4}
+
+
+donor_counts_df<-donor_counts_df[donor_counts_df$Interval=="Interval_0.02_0.04",]
+
+donor_counts_df$total_donor_cells<-total_cells_per_donor[match(total_cells_per_donor$Var1,donor_counts_df$Donor),]$Freq
+
+
+my_comparisons <- list(
+  c("S1", "S2"),
+  c("S2", "S3"),
+  c("S1","S3"))
+
+donor_counts_df$percent_SFRP4<-(donor_counts_df$Count/donor_counts_df$total_donor_cells)*100
+
+library(ggpubr)
+#pdf("/work/without_ambientRNAremoval/figures/boxplot_donors_saf_SFRP4_percent.pdf", width = 7, height = 5)
+ggplot(donor_counts_df, aes(x = saf, y = percent_SFRP4, fill=saf))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter(color = "grey", width = 0.2, size = 1.5, alpha = 0.7)+
+  theme_minimal() +
+  theme(legend.position = "none")+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +  # Rotate x-axis labels for readability
+  labs(title = "", x = "", y = "Percent donor SFRP4hi adipocytes")+ scale_fill_manual(values=c("#00AFBB", "#E7B800","#FC4E07"))+ theme_classic()+stat_compare_means(method = "kruskal.test", label = "p.format", label.y = 50)
+#dev.off()
+
+
+```

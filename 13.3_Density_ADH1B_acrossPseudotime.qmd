@@ -1,0 +1,123 @@
+---
+title: "Pseudotime analysis. Model with and without including information about Saf score. trajectory 1 (DPP+ -> EPHA3)"
+author: "Johanne D. Madsen"
+date: '`r Sys.Date()`'
+format:
+  html:
+    embed-resources: true
+execute: 
+  echo: false
+  warning: false
+---
+
+```{r setup}
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(qs)
+library(harmony)
+library(ggplot2)
+library(RDS)
+library(slingshot)
+library(gamm4)
+library(scHelper)
+library(ComplexHeatmap)
+library(seriation)
+library(tidyr)
+library(purrr)
+library(tidyverse)
+
+AA_common<-qread("/work/without_ambientRNAremoval/data/AA_common_annotated_publication.qs")
+seurat_common <- qread("/work/without_ambientRNAremoval/data/seurat_object_annotated.qs")
+
+sds_obj<- qread("/work/without_ambientRNAremoval/data/sds_obj_DC13_emb24.qs")
+```
+
+```{r}
+
+pseudotime2 <- sds_obj@assays@data@listData$pseudotime[, 2] %>% 
+  .[!is.na(.)]
+
+AA_cells_per_condition<-as.data.frame(table(AA_common$saf))
+
+total_cells_per_condition<-as.data.frame(table(seurat_common$saf))
+
+target_auc<-AA_cells_per_condition$Freq/total_cells_per_condition$Freq
+
+```
+
+
+```{r}
+
+pseudotime_S1 <- pseudotime2[names(pseudotime2) %in% colnames(AA_common)[AA_common@meta.data$saf == "S1"]]
+pseudotime_S2 <- pseudotime2[names(pseudotime2) %in% colnames(AA_common)[AA_common@meta.data$saf == "S2"]]
+pseudotime_S3 <- pseudotime2[names(pseudotime2) %in% colnames(AA_common)[AA_common@meta.data$saf == "S3"]]
+
+# Combine into a single dataframe
+data <- data.frame(
+  pseudotime = c(pseudotime_S1, pseudotime_S2, pseudotime_S3),
+  condition = c(
+    rep("S1", length(pseudotime_S1)),
+    rep("S2", length(pseudotime_S2)),
+    rep("S3", length(pseudotime_S3))
+  )
+)
+
+Annotation<-c(AA_common$Annotation)
+
+Annotation_ordered <- Annotation[match(rownames(data), names(Annotation))]
+data[,3]<-Annotation_ordered
+colnames(data)<-c("pseudotime", "condition", "Annotation" )
+
+target_aucs <- tibble(
+  condition = c("S1", "S2", "S3"),
+  target_auc = target_auc
+)
+
+library(pracma)
+
+density_data <- data %>%
+  group_by(condition) %>%
+  summarise(
+    density = list(density(pseudotime, from = 0, to = max(pseudotime), n = 500)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    pseudotime = map(density, "x"),
+    raw_density = map(density, "y"),
+    current_auc = map2_dbl(pseudotime, raw_density, ~ trapz(.x, .y))
+  ) %>%
+  left_join(target_aucs, by = "condition") %>%
+  mutate(
+    scaling_factor = target_auc / current_auc,
+    scaled_density = map2(raw_density, scaling_factor, ~ .x * .y)
+  ) %>%
+  unnest(c(pseudotime, scaled_density))
+
+density_data
+
+x_min<-0.02
+x_max<-0.04
+
+
+#pdf("/work/without_ambientRNAremoval/figures/5G_Adjusted_density_pseudotime_AdipocytesASPCs.pdf", width = 6, height = 4)
+
+
+# Plot med normaliseret AUC
+ggplot(density_data, aes(x = pseudotime, y = scaled_density, colour = condition)) +
+  geom_line() +
+  theme_classic() +
+  labs(
+    x = "Pseudotime",
+    y = "Adjusted Density",
+    title = "")+ 
+scale_color_manual(values=c("#00AFBB", "#E7B800","#FC4E07"))+
+  geom_ribbon(aes(ymin = 0, ymax = scaled_density, fill = condition), 
+              data = density_data %>% filter(pseudotime >= x_min & pseudotime <= x_max), 
+              alpha = 0.3) + scale_fill_manual(values=c("#00AFBB", "#E7B800","#FC4E07"))
+
+#dev.off()
+
+```
+
